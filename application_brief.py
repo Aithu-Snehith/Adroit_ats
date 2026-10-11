@@ -194,10 +194,15 @@ def resume_text_for(cand: Dict, job_id: Optional[int], version_id: Optional[int]
 
 
 def build(cand: Dict, job: Dict, jd_text: str, version_id: Optional[int] = None, reply: bool = False,
-          skills: Optional[List[str]] = None, default_to: str = "", default_subject: str = "") -> Dict:
-    """Everything a draft needs: {to, subject, body, checklist, needs_input, brief, fallback}."""
+          skills: Optional[List[str]] = None, default_to: str = "", default_subject: str = "",
+          resume_text: Optional[str] = None) -> Dict:
+    """Everything a draft needs: {to, subject, body, checklist, needs_input, brief, fallback}.
+    `resume_text` = the optimized resume as shown in the Optimize window (not saved yet)."""
     b = brief(jd_text)
-    resume_text, tailored = resume_text_for(cand, job.get("id"), version_id)
+    if resume_text and resume_text.strip():
+        tailored = True
+    else:
+        resume_text, tailored = resume_text_for(cand, job.get("id"), version_id)
     w = write(cand, job, jd_text, resume_text, b, reply=reply, tailored=tailored, skills=skills)
     to = b.get("apply_to_email") or default_to or (job.get("recruiter_email") or "")
     subject = b.get("required_subject") or default_subject or gmail_multi_manager.build_subject(cand, job)

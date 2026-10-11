@@ -150,6 +150,13 @@ check(r["to_email"] == "careers@creuto.com" and r["subject"] == "DevOps Engineer
 check(writes and "40 manual deployment jobs" in writes[-1] and "(original resume text)" not in writes[-1], "written from the TAILORED resume")
 check(r["attachment"] == "Visakh_Brieftest_Terraform.docx" and any("overqualified" in i["text"] for i in r["checklist"]), f"attachment + checklist: {r['attachment']}")
 
+# ---- preview inside the Optimize window: written from the resume text ON SCREEN (not saved yet)
+writes.clear()
+r = client.post("/api/outreach/application-preview", json={"candidate_id": cid, "job_id": job_id, "jd_text": JD,
+                                                           "resume_text": RESUME + "\nON SCREEN EDIT", "to_email": "row@example.invalid"}).get_json()
+check(writes and "ON SCREEN EDIT" in writes[-1] and r["to"] == "careers@creuto.com" and r["subject"] == "DevOps Engineer Application"
+      and r["checklist"], f"preview from the on-screen resume: {r.get('to')}")
+
 # ---- automatic requirement draft whose JD says "email careers@..." -> new email there, needs input
 appended = []
 
@@ -227,7 +234,7 @@ try:
         page.fill("input[name=password]", PW)
         page.click("button[type=submit]")
         page.wait_for_url("**/dashboard**")
-        check("app.js?v=5.73.0" in page.content(), "cache-buster not bumped to 5.73.0")
+        check("app.js?v=5.74.0" in page.content(), "cache-buster not bumped to 5.74.0")
         page.wait_for_function("typeof state !== 'undefined' && state.consultants && state.consultants.length", timeout=15000)
         page.evaluate(f"openAiCopilotModal({cid}, {job_id}, {{ jdText: {json.dumps(JD)}, versionId: {vid} }})")
         page.wait_for_function("document.getElementById('copilot-body').value.includes('Infrastructure challenge')", timeout=15000)

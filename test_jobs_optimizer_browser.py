@@ -10,9 +10,9 @@
        then reused) and optimized;
      - a posting that can't be read -> the summary + the reason; nothing is optimized until the
        full JD is pasted.
-   After optimizing, Download saves Name_Skill.docx and downloads it; "Save & Create Draft" opens the
-   review window (application email to the row's recruiter, that same resume attached) and saving it
-   creates the Gmail draft.
+   After optimizing, Download saves Name_Skill.docx and downloads it; the email that will be sent is shown
+   in the same window (editable); "Save & Create Draft" creates the Gmail draft with exactly that email
+   to the row's recruiter, with that same resume attached.
 
 COST SAFETY: scrapers, posting reads, Gemini (resume_bot._generate) and Gmail (IMAP) are stubs;
 any request to Apify or a non-local host is aborted. Consultants and jobs are labelled fixtures.
@@ -174,7 +174,7 @@ try:
         page.fill("input[name=password]", PASSWORD)
         page.click("button[type=submit]")
         page.wait_for_url("**/dashboard**")
-        check("app.js?v=5.73.0" in page.content(), "cache-buster not bumped to 5.73.0")
+        check("app.js?v=5.74.0" in page.content(), "cache-buster not bumped to 5.74.0")
 
         # 1. Browse Jobs on Karun (not the first consultant)
         page.click("a.nav-item[data-tab=candidates]")
@@ -211,14 +211,18 @@ try:
         with page.expect_download() as dl:
             page.click("#btn-do-download")
         check(dl.value.suggested_filename == "Karun_Testcase_Power_BI.docx", f"download name: {dl.value.suggested_filename}")
+        # the email is shown IN the Optimize window before anything is drafted
+        page.wait_for_function("document.getElementById('do-email-body').value.length > 40", timeout=15000)
+        check(page.is_visible("#do-email") and page.input_value("#do-email-to") == "rec@example.invalid", f"email preview in the same window, To = row's recruiter: {page.input_value('#do-email-to')}")
+        page.locator("#do-email").scroll_into_view_if_needed()
+        page.screenshot(path=os.path.join(tmp_dir, "email_preview.png"))
+        print("EMAIL_PREVIEW_SHOT", os.path.join(tmp_dir, "email_preview.png"))
+        n_before = len(captured)
+        page.fill("#do-email-body", page.input_value("#do-email-body").replace("Hi", "Hello", 1) + "\nEDITED IN THE PANEL")
         page.click("#btn-do-save")
-        # review step: the chat window opens with the application email, To = the row's recruiter
-        page.wait_for_selector("#modal-ai-copilot", state="visible", timeout=15000)
-        page.wait_for_function("document.getElementById('copilot-body').value.length > 40", timeout=15000)
-        check(page.input_value("#copilot-to-email") == "rec@example.invalid", f"To = the row's recruiter: {page.input_value('#copilot-to-email')}")
-        check("Karun_Testcase_Power_BI.docx" in page.inner_text("#copilot-resume-name"), "the saved tailored version will be attached")
-        page.click("#btn-copilot-save-draft")
-        page.wait_for_function("document.querySelector('.toast-container').innerText.includes('Gmail Draft')", timeout=15000)
+        page.wait_for_function("document.querySelector('.toast-container').innerText.includes('Gmail Draft Created')", timeout=15000)
+        sent_body = captured[-1].get_body(preferencelist=("plain",)).get_content() if len(captured) > n_before else ""
+        check("EDITED IN THE PANEL" in sent_body, "the draft gets exactly the email shown (with my edit)")
         att = [x.get_filename() for x in captured[-1].iter_attachments()] if captured else []
         check(att == ["Karun_Testcase_Power_BI.docx"] and captured and captured[-1]["To"] == "rec@example.invalid",
               f"draft to the row's recruiter with the tailored resume: {att}")

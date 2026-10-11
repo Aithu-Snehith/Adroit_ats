@@ -1272,8 +1272,30 @@ def api_ai_personalize_draft():
                    rate_on_file=bool((cand.get("target_rate") or "").strip()),
                    us_based=gmail_multi_manager._is_us_based(cand), **_draft_extras(user, cand, job, to_email, version_id))
         return jsonify(out)
-    out.update(outreach_ai.edit_draft(cand, job, user_instruction, current_subject, current_body))
+    out.update(outreach_ai.edit_draft(cand, job, user_instruction, current_subject, current_body,
+                                      resume_text=str(data.get("resume_text") or "")[:20000]))
     return jsonify(out)
+
+
+@app.route("/api/outreach/application-preview", methods=["POST"])
+def api_application_preview():
+    """The email that "Save & Create Draft" will send, shown INSIDE the Optimize window before anything
+    is saved: written from the optimized resume text on screen and the JD's instructions."""
+    user = current_user()
+    if not user:
+        return jsonify({"error": "Login required"}), 401
+    data = request.get_json(silent=True) or {}
+    cid, jid = _int_or_none(data.get("candidate_id")), _int_or_none(data.get("job_id"))
+    if not cid or not jid or not can_access_candidate(user, cid):
+        return jsonify({"error": "Consultant not found"}), 404
+    cand, job = models.get_candidate_by_id(cid), models.get_job_by_id(jid)
+    if not cand or not job:
+        return jsonify({"error": "Job not found"}), 404
+    b = application_brief.build(cand, job, str(data.get("jd_text") or "")[:20000],
+                                default_to=(data.get("to_email") or job.get("recruiter_email") or "").strip(),
+                                resume_text=str(data.get("resume_text") or "")[:20000])
+    return jsonify({"to": b["to"], "subject": b["subject"], "body": b["body"], "checklist": b["checklist"],
+                    "needs_input": b["needs_input"], "fallback": b["fallback"]})
 
 
 def _draft_extras(user, cand, job, to_email, version_id=None):

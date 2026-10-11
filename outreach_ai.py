@@ -107,7 +107,7 @@ def changed_lines(old: str, new: str) -> int:
     return sum(max(i2 - i1, j2 - j1) for tag, i1, i2, j1, j2 in sm.get_opcodes() if tag != "equal")
 
 
-def edit_draft(cand: Dict, job: Dict, instruction: str, subject: str, body: str) -> Dict:
+def edit_draft(cand: Dict, job: Dict, instruction: str, subject: str, body: str, resume_text: str = "") -> Dict:
     """{subject, body, reply, changes, needs_info, lines_changed, model, applied}. Never raises; when the
     AI can't run or the edit is refused, the draft comes back unchanged and `reply` says why."""
     unchanged = {"subject": subject, "body": body, "changes": [], "needs_info": [], "lines_changed": 0,
@@ -117,7 +117,7 @@ def edit_draft(cand: Dict, job: Dict, instruction: str, subject: str, body: str)
     f = facts(cand, job)
     try:   # the resume that will be attached - so "answer the JD's questions" can use real projects
         import application_brief
-        f["resume"] = application_brief.resume_text_for(cand, job.get("id"))[0][:8000]
+        f["resume"] = (resume_text or application_brief.resume_text_for(cand, job.get("id"))[0])[:8000]
     except Exception:
         f["resume"] = ""
     prompt = (f"FACTS:\n{json.dumps(f, indent=1, default=str)}\n\nCURRENT SUBJECT:\n{subject}\n\n"
