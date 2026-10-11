@@ -266,14 +266,33 @@ def build_subject(candidate: Dict, job: Dict) -> str:
     return f"Application: {job.get('title') or 'Open Role'} - {name}" + (f" ({', '.join(bits)})" if bits else "")
 
 
-def generate_consultant_pitch(candidate: Dict, job: Dict, custom_notes: str = "") -> str:
+# A sender name like "Devops Engineer" or "Hiring Team" is a role / mailbox, not a person to greet.
+_ROLE_WORDS = re.compile(r"\b(engineer|developer|devops|sre|architect|analyst|consultant|admin|administrator|hiring|team|"
+                         r"recruit\w*|talent|hr|jobs?|careers?|staffing|solutions|technologies|info|support|manager|lead)\b", re.I)
+
+
+def person_name(name: str) -> str:
+    """'Rakesh Kumar' -> 'Rakesh'; '' for empty / placeholder / role-like names ('Devops Engineer')."""
+    n = (name or "").strip().strip('"')
+    if not n or n.lower() in ("none", "null") or _ROLE_WORDS.search(n) or "@" in n or any(ch.isdigit() for ch in n):
+        return ""
+    return n.split()[0].capitalize() if n.split()[0].isalpha() else n.split()[0]
+
+
+def generate_consultant_pitch(candidate: Dict, job: Dict, custom_notes: str = "", context: Optional[Dict] = None) -> str:
     """A short first-person application email from the consultant to the hiring recruiter.
 
     Only facts on file are used: no visa/C2C wording for a consultant outside the US, no "H1B"
     when no status is recorded, the job source only when it's a real site (never "Manual Paste"),
     and no copy of the pasted requirement - the email names the consultant's skills that the
     requirement actually mentions. custom_notes is the recruiter's emphasis instruction (e.g.
-    "Emphasize AWS"); it steers which skills come first and is never pasted into the email."""
+    "Emphasize AWS"); it steers which skills come first and is never pasted into the email.
+
+    context (answering a requirement email, see inbox_requirements): {"reply": True} thanks them for
+    sharing the requirement instead of "I came across your opening"; "skills" = the skills the match
+    analysis found in BOTH the requirement and the resume; "tailored" = the attached resume was updated
+    for this requirement."""
+    context = context or {}
     name = candidate.get("name") or "Consultant"
     title = (candidate.get("title") or "").strip()
     exp = candidate.get("experience_years")
@@ -287,11 +306,13 @@ def generate_consultant_pitch(candidate: Dict, job: Dict, custom_notes: str = ""
     company = (job.get("company") or "").strip()
     company_part = f" at {company}" if company.lower() not in _PLACEHOLDER_COMPANIES else ""
     site = _source_site(job.get("source"))
-    greeting = job.get("recruiter_name") or "Hiring Team"
-    if greeting.strip().lower() in ("none", "null", "hiring manager", ""):
-        greeting = "Hiring Team"
-
-    intro = f"I came across your opening for {job_title}{company_part}" + (f" on {site}" if site else "") + " and I am very interested in it."
+    first = person_name(job.get("recruiter_name") or "")
+    if context.get("reply"):
+        greeting = f"Hi {first}," if first else "Hi,"
+        intro = f"Thank you for sharing the {job_title} requirement{company_part}. I am very interested in this position."
+    else:
+        greeting = f"Hi {first or 'Hiring Team'},"
+        intro = f"I came across your opening for {job_title}{company_part}" + (f" on {site}" if site else "") + " and I am very interested in it."
 
     who = f"I am {name}"
     if title and exp:
@@ -305,26 +326,28 @@ def generate_consultant_pitch(candidate: Dict, job: Dict, custom_notes: str = ""
     who += "."
 
     job_text = " ".join([job.get("description") or "", job.get("full_description") or "", job.get("title") or ""])
-    matched = matching_skills(candidate, job_text, custom_notes)
+    matched = [str(x).strip() for x in (context.get("skills") or []) if str(x).strip()][:5] or matching_skills(candidate, job_text, custom_notes)
     if matched:
         fit = f"My hands-on experience in {', '.join(matched[:-1]) + ' and ' + matched[-1] if len(matched) > 1 else matched[0]} matches the key requirements of this role."
     else:
         all_skills = [s.strip() for s in (candidate.get("primary_skills") or "").split(",") if s.strip()][:4]
         fit = f"My core skills include {', '.join(all_skills)}." if all_skills else ""
 
-    closing = "Please find my resume attached for your review. I am available for an interview at your convenience"
+    closing = ("I have attached my updated resume, tailored to this requirement, for your review." if context.get("tailored")
+               else "Please find my resume attached for your review.") + " I am available for an interview at your convenience"
     closing += " and open to contract (C2C / W2) opportunities." if us_based else " and happy to share any further details you need."
 
     signature = [name] + ([title] if title else []) + ([f"Phone: {phone}"] if phone else []) \
         + ([f"Email: {email_addr}"] if email_addr else []) + ([f"LinkedIn: {linkedin}"] if linkedin else [])
 
-    paragraphs = [f"Hi {greeting},", intro, " ".join(x for x in (who, fit) if x), closing,
+    paragraphs = [greeting, intro, " ".join(x for x in (who, fit) if x), closing,
                   "Looking forward to hearing from you.", "Best regards,\n" + "\n".join(signature)]
     return "\n\n".join(paragraphs) + "\n"
 
 
 def create_candidate_draft(candidate_id: int, job_id: int, custom_to_email: Optional[str] = None, custom_notes: str = "", custom_subject: Optional[str] = None, custom_body: Optional[str] = None, bcc: Optional[List[str]] = None, save_to_email: bool = True, attachment: Optional[Tuple[str, bytes]] = None, acting_user_id: Optional[int] = None,
-                          resume_version_id: Optional[int] = None, reply_to: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
+                          resume_version_id: Optional[int] = None, reply_to: Optional[Dict[str, str]] = None,
+                          pitch_context: Optional[Dict] = None) -> Dict[str, Any]:
     cand = models.get_candidate_by_id(candidate_id)
     if not cand:
         return {"success": False, "error": f"Candidate #{candidate_id} not found."}
@@ -355,7 +378,7 @@ def create_candidate_draft(candidate_id: int, job_id: int, custom_to_email: Opti
         # answering a requirement email: "Re: <their subject>" so it stays in the vendor's thread
         their = (reply_to.get("subject") or "").strip()
         subject = their if their.lower().startswith("re:") else f"Re: {their}" if their else subject
-    body_text = (custom_body.strip() if custom_body and custom_body.strip() else generate_consultant_pitch(cand, job, custom_notes))
+    body_text = (custom_body.strip() if custom_body and custom_body.strip() else generate_consultant_pitch(cand, job, custom_notes, pitch_context))
 
     msg = EmailMessage()
     msg["To"] = to_email

@@ -1609,7 +1609,7 @@ def update_job_recruiter_info(job_id, email=None, phone=None, name=None, salary=
         conn.commit()
     conn.close()
 
-def save_or_update_scraped_job(job_data):
+def save_or_update_scraped_job(job_data, match_title_company=True):
     conn = get_db_connection()
     cursor = conn.cursor()
 
@@ -1633,7 +1633,9 @@ def save_or_update_scraped_job(job_data):
     if url:
         cursor.execute("SELECT id, recruiter_email FROM jobs WHERE url = ?", (url,))
         existing = cursor.fetchone()
-    if not existing:
+    if not existing and match_title_company:
+        # (off for requirement emails: two vendors sending the same title + client are two separate
+        # submissions, each with its own recruiter - see inbox_requirements)
         cursor.execute("SELECT id, recruiter_email FROM jobs WHERE title = ? AND company = ?", (title, company))
         existing = cursor.fetchone()
 

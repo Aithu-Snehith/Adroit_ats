@@ -222,7 +222,7 @@ def _handle(conn, rid: int, cand: Dict, p: Dict, full_text: str, user_id: Option
         "job_type": data.get("employment_type") or "", "salary": data.get("rate") or "", "recruiter_email": data["recruiter_email"],
         "recruiter_name": (data.get("recruiter_name") or p.get("from_name") or "")[:120], "description": jd[:20000],
         "url": f"email:{cand['id']}:{p['message_id']}", "country": cand.get("country") or "United States",
-        "matched_skills": ", ".join(data.get("skills") or [])[:500], "match_score": match})
+        "matched_skills": ", ".join(data.get("skills") or [])[:500], "match_score": match}, match_title_company=False)
     job_id = job["id"] if isinstance(job, dict) else job
     version_id, attachment = None, (name, original)
     tailored = resume_versions.decode_docx(res.get("docx_base64") or "") if res.get("optimized") else None
@@ -234,7 +234,8 @@ def _handle(conn, rid: int, cand: Dict, p: Dict, full_text: str, user_id: Option
     out = gmail_multi_manager.create_candidate_draft(
         cand["id"], job_id, custom_to_email=data["recruiter_email"], attachment=attachment,
         acting_user_id=user_id or cand.get("assigned_user_id"), resume_version_id=version_id,
-        reply_to={"message_id": p["message_id"], "references": p.get("references_hdr") or "", "subject": p["subject"]})
+        reply_to={"message_id": p["message_id"], "references": p.get("references_hdr") or "", "subject": p["subject"]},
+        pitch_context={"reply": True, "skills": res.get("mandatory_matched_skills") or [], "tailored": bool(version_id)})
     if not out.get("success"):
         raise RuntimeError(out.get("error") or "Could not create the Gmail draft")
     _set(conn, rid, status="drafted", match_pct=match, job_id=job_id, resume_version_id=version_id, ai_model=data.get("_model"),

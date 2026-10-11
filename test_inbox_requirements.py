@@ -100,7 +100,7 @@ def fake_generate(client, types, system, prompt, want_json, max_tokens):
             return json.dumps({"is_requirement": False}), False, "stub"
         title = "Java Developer" if "java developer" in low else "DevOps SRE Engineer"
         return json.dumps({"is_requirement": True, "title": title, "client": "Virtusa", "location": "Hyderabad", "employment_type": "Full-time",
-                           "skills": ["AWS", "Kubernetes"], "recruiter_name": "Rakesh", "recruiter_email": "not-in-the-email@x.example",
+                           "skills": ["AWS", "Kubernetes"], "recruiter_name": "", "recruiter_email": "not-in-the-email@x.example",
                            "job_description": f"{title}: AWS, Kubernetes, Terraform, CI/CD. 5+ years."}), False, "stub"
     return json.dumps({"category": "other", "reason": ""}), False, "stub"
 
@@ -164,6 +164,10 @@ att = [p for p in m.iter_attachments()] if m else []
 check(att and att[0].get_payload(decode=True) == TAILORED and att[0].get_filename().startswith("Visakh"), f"tailored resume attached: {[a.get_filename() for a in att]}")
 body = m.get_body(preferencelist=("plain",)).get_content() if m else ""
 check("C2C" not in body and "authorized to work" not in body, "India consultant: no US wording in the pitch")
+check(body.startswith("Hi,") and "Hi Devops Engineer" not in body, f"sender name 'Devops Engineer' is a role, not a person: {body[:40]!r}")
+check("Thank you for sharing the DevOps SRE Engineer requirement at Virtusa" in body and "came across your opening" not in body,
+      f"answers their email: {body[:200]!r}")
+check("AWS and Kubernetes" in body and "updated resume, tailored to this requirement" in body, f"skills from the match + tailored resume: {body!r}")
 rows = {r["message_id"]: r for r in iq.list_for(conn, [cid])}
 r1 = rows["<req1@virtusa>"]
 check(r1["status"] == "drafted" and r1["match_pct"] == 78 and r1["resume_version_id"] and r1["job_title"] == "DevOps SRE Engineer", f"row: {r1}")
@@ -189,6 +193,12 @@ resume_bot.ai_configured = lambda: True
 iq.scan_candidate(conn, models.get_candidate_by_id(cid), REC["id"])
 r7 = {r["message_id"]: r for r in iq.list_for(conn, [cid])}["<req7@v7>"]
 check(r7["status"] == "drafted" and r7["attempts"] == 2 and len(appended) == 2, f"retried and drafted: {r7['status']} attempts={r7['attempts']}")
+b7 = appended[-1].get_body(preferencelist=("plain",)).get_content() if len(appended) == 2 else ""
+check(b7.startswith("Hi Sam,"), f"a real person's first name is used: {b7[:30]!r}")
+j1_, j7_ = r1["job_id"], r7["job_id"]
+check(j1_ != j7_ and models.get_job_by_id(j1_)["recruiter_email"] == "rakesh.r@virtusa-vendor.example"
+      and models.get_job_by_id(j7_)["recruiter_email"] == "sam@vendor7.example",
+      "same title + client from two vendors = two jobs, each keeps its own recruiter")
 conn.close()
 
 # ---- API + privacy
