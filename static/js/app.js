@@ -5103,6 +5103,7 @@ function trkWire() {
     $('trk-a-save').addEventListener('click', trkAddSave);
     $('trk-replies-btn').addEventListener('click', trkCheckReplies);
     $('trk-open-replies').addEventListener('click', () => openReplies(trk.candId || ''));
+    $('trk-open-reqs').addEventListener('click', () => openRequirements(trk.candId || ''));
 }
 
 function trkMsg(text, kind) {
@@ -5394,6 +5395,68 @@ async function rpCheck() {
         rpMsg(`${d.new_replies || 0} new repl${d.new_replies === 1 ? 'y' : 'ies'}.` + ((d.errors || []).length ? ' Problems: ' + d.errors.join('; ') : ''), d.new_replies ? 'ok' : '');
         rpLoad();
     } finally { btn.disabled = false; }
+}
+
+// =========================================================================
+// Requirements from Gmail (inbox_requirements.py): requirement email -> tailored resume -> draft reply.
+// =========================================================================
+const rq = { wired: false, poll: null };
+const RQ_COLORS = { drafted: '#dcfce7', low_match: '#fef3c7', not_requirement: '#f1f5f9', filtered: '#f1f5f9', error: '#fee2e2', checking: '#e0f2fe' };
+
+function openRequirements(candId) {
+    const $ = id => document.getElementById(id);
+    if (!rq.wired) {
+        rq.wired = true;
+        $('btn-close-reqs').addEventListener('click', () => { $('modal-reqs').style.display = 'none'; clearTimeout(rq.poll); });
+        ['rq-consultant', 'rq-status'].forEach(id => $(id).addEventListener('change', rqLoad));
+        $('rq-scan').addEventListener('click', rqScan);
+    }
+    $('rq-consultant').innerHTML = '<option value="">All my consultants</option>' + (state.consultants || [])
+        .map(c => `<option value="${c.id}">${escapeHtml(c.name)}</option>`).join('');
+    $('rq-consultant').value = candId ? String(candId) : '';
+    $('rq-msg').textContent = '';
+    $('modal-reqs').style.display = 'flex';
+    rqLoad();
+}
+
+async function rqLoad() {
+    const $ = id => document.getElementById(id);
+    const cid = $('rq-consultant').value;
+    const res = await fetch('/api/requirements' + (cid ? `?candidate_id=${cid}` : ''));
+    const d = await res.json().catch(() => ({}));
+    if (!res.ok) { $('rq-msg').textContent = d.error || 'Could not load.'; return; }
+    $('rq-min').textContent = d.min_match;
+    const want = $('rq-status').value;
+    const rows = (d.requirements || []).filter(r => !want || r.status === want || (want === 'error' && r.status === 'checking'));
+    $('rq-body').innerHTML = rows.length ? rows.map(r => `
+        <tr data-id="${r.id}">
+            <td style="white-space:nowrap;">${escapeHtml((r.received_at || '').slice(0, 16))}</td>
+            <td>${escapeHtml(r.candidate_name || '')}</td>
+            <td>${escapeHtml(r.from_name || '')}<div style="color:#64748b;">${escapeHtml(r.from_email || '')}</div></td>
+            <td style="min-width:200px;">${escapeHtml(r.subject || '')}${r.job_title ? `<div style="color:#64748b;">${escapeHtml(r.job_title)}${r.job_company ? ' · ' + escapeHtml(r.job_company) : ''}</div>` : ''}</td>
+            <td><span style="display:inline-block; padding:2px 8px; border-radius:999px; font-weight:700; background:${RQ_COLORS[r.status] || '#f1f5f9'}; white-space:nowrap;">${escapeHtml(r.status_label)}</span></td>
+            <td>${r.match_pct != null ? r.match_pct + '%' : '-'}</td>
+            <td style="max-width:170px; word-break:break-all;">${r.resume_version_id ? `<a href="/api/optimized-resumes/${r.resume_version_id}/download">${escapeHtml(r.resume_filename || 'tailored resume')}</a>` : (r.status === 'drafted' ? '<span style="color:#94a3b8;">original</span>' : '-')}</td>
+            <td style="min-width:220px; color:#475569;">${escapeHtml(r.reason || '')}</td>
+        </tr>`).join('') : `<tr><td colspan="8" style="text-align:center; color:#64748b; padding:18px;">${want ? 'Nothing with this result yet - choose "All".' : 'No requirement emails checked yet - click "Scan Gmail now".'}</td></tr>`;
+    clearTimeout(rq.poll);
+    if (d.scanning && $('modal-reqs').style.display === 'flex') {
+        $('rq-msg').textContent = 'Scanning Gmail and tailoring resumes... (about a minute per requirement)';
+        rq.poll = setTimeout(rqLoad, 8000);
+    } else if ($('rq-msg').textContent.startsWith('Scanning')) {
+        $('rq-msg').textContent = 'Scan finished.';
+    }
+}
+
+async function rqScan() {
+    const $ = id => document.getElementById(id);
+    const cid = $('rq-consultant').value;
+    const res = await fetch('/api/requirements/scan', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(cid ? { candidate_id: parseInt(cid) } : {}) });
+    const d = await res.json().catch(() => ({}));
+    if (!res.ok) { $('rq-msg').textContent = d.error || 'Could not start the scan.'; return; }
+    $('rq-msg').textContent = d.started ? 'Scanning Gmail and tailoring resumes... (about a minute per requirement)' : (d.message || '');
+    if (d.started) setTimeout(rqLoad, 3000);
 }
 
 // =========================================================================

@@ -646,6 +646,7 @@
                         </div>
                         <button type="button" class="btn btn-primary btn-sm" id="btn-open-tracker-all" onclick="openTracker('')">📋 All applications</button>
                         <button type="button" class="btn btn-secondary btn-sm" id="btn-open-replies-all" onclick="openReplies('')">📨 Recruiter replies</button>
+                        <button type="button" class="btn btn-secondary btn-sm" id="btn-open-reqs-all" onclick="openRequirements('')">📥 Requirements from Gmail</button>
                     </div>
 
                     <div class="pipeline-kanban" id="pipeline-container">
@@ -1267,6 +1268,34 @@
         </div>
     </div>
 
+    <!-- New requirement emails -> tailored resume -> Gmail draft reply (inbox_requirements.py) -->
+    <div class="modal-backdrop" id="modal-reqs" style="display: none; z-index: 1150;">
+        <div class="modal-dialog" style="max-width: 1200px; width: 96vw;">
+            <div class="modal-header">
+                <h3>📥 Requirements from Gmail</h3>
+                <button class="modal-close" type="button" id="btn-close-reqs">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div style="display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin-bottom:8px;">
+                    <select id="rq-consultant" class="form-control" style="max-width:240px;"></select>
+                    <select id="rq-status" class="form-control" style="max-width:220px;">
+                        <option value="">All</option><option value="drafted" selected>Drafts created</option><option value="low_match">Low match</option>
+                        <option value="not_requirement">Not a requirement</option><option value="filtered">Skipped</option><option value="error">Problems</option>
+                    </select>
+                    <button type="button" class="btn btn-primary btn-sm" id="rq-scan">📥 Scan Gmail now</button>
+                    <span id="rq-msg" style="font-size:0.85rem; color:#475569;"></span>
+                </div>
+                <div style="font-size:0.78rem; color:#64748b; margin-bottom:10px;">New mail in each consultant's Primary inbox is checked every 20 minutes. A real requirement with a match of at least <span id="rq-min"></span>% gets a Gmail draft reply in the vendor's thread with the tailored resume attached - <b>check it in Gmail and press Send</b>. Nothing is sent automatically.</div>
+                <div style="overflow-x:auto;">
+                    <table class="data-table" id="rq-table" style="font-size:0.8rem;">
+                        <thead><tr><th>Received</th><th>Consultant</th><th>From</th><th>Subject</th><th>Result</th><th>Match</th><th>Resume attached</th><th>Details</th></tr></thead>
+                        <tbody id="rq-body"></tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <div class="modal-backdrop" id="modal-tracker" style="display: none; z-index: 1140;">
         <div class="modal-dialog" style="max-width: 1320px; width: 97vw;">
             <div class="modal-header">
@@ -1284,6 +1313,7 @@
                     <button type="button" class="btn btn-secondary btn-sm" id="trk-add-btn">+ Add application</button>
                     <button type="button" class="btn btn-secondary btn-sm" id="trk-replies-btn" title="Reads recruiter replies from the consultant's Gmail (nothing is marked read or changed)">✉ Check Gmail replies</button>
                     <button type="button" class="btn btn-secondary btn-sm" id="trk-open-replies" title="Read recruiter replies and answer them with AI">📨 Replies</button>
+                    <button type="button" class="btn btn-secondary btn-sm" id="trk-open-reqs" title="New requirement emails found in Gmail and the drafts made for them">📥 Requirements</button>
                     <a class="btn btn-primary btn-sm" id="trk-export" href="#">⬇ Excel</a>
                 </div>
                 <div id="trk-summary" style="display:flex; flex-wrap:wrap; gap:8px; margin-bottom:10px;"></div>
@@ -1401,7 +1431,7 @@
     <aside id="trk-drawer" aria-label="Candidate tracking card" style="position:fixed; top:0; right:0; height:100vh; width:min(480px, 100vw); background:#ffffff; box-shadow:-12px 0 30px rgba(15,23,42,0.18); z-index:1201; transform:translateX(105%); transition:transform 0.2s ease; overflow-y:auto; box-sizing:border-box;"></aside>
     <script>window.CURRENT_USER = {{ {'id': user.id, 'admin': ('Admin' in (user.role or ''))} | tojson }};
         window.VIEW_REGION = {{ view_region | tojson }};</script>
-    <script src="/static/js/app.js?v=5.71.0"></script>
+    <script src="/static/js/app.js?v=5.72.0"></script>
 
     <!-- Recruiter Management Inline Fallback: app.js defines all of these with toast-based
          feedback and no page reloads. These only fire if app.js somehow failed to load -

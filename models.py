@@ -439,6 +439,27 @@ def init_db():
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     );
     """)
+    # New requirement emails found in a consultant's Gmail (inbox_requirements.py): each message once,
+    # and what happened to it (filtered / not a requirement / low match / drafted / error).
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS inbox_requirements (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        candidate_id INTEGER NOT NULL,
+        message_id TEXT NOT NULL,
+        from_email TEXT,
+        from_name TEXT,
+        subject TEXT,
+        received_at TEXT,
+        status TEXT,
+        reason TEXT,
+        match_pct INTEGER,
+        job_id INTEGER,
+        resume_version_id INTEGER,
+        attempts INTEGER DEFAULT 0,
+        ai_model TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+    """)
     # Recruiter replies to applications, read from the consultant's Gmail (reply_inbox.py): the text,
     # the AI's sorting (interview / question / ...), the prepared reply and what was done with it.
     cursor.execute("""
@@ -550,6 +571,7 @@ def init_db():
         # one row per Gmail message per consultant - also how two server workers avoid handling a reply twice
         "CREATE UNIQUE INDEX IF NOT EXISTS ux_application_replies_msg ON application_replies (candidate_id, message_id)",
         "CREATE INDEX IF NOT EXISTS ix_application_replies_app ON application_replies (application_id)",
+        "CREATE UNIQUE INDEX IF NOT EXISTS ux_inbox_requirements_msg ON inbox_requirements (candidate_id, message_id)",
     ):
         try:
             cursor.execute(idx_sql)

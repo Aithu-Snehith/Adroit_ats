@@ -73,7 +73,7 @@ try:
         page.fill("input[name=password]", PASSWORD)
         page.click("button[type=submit]")
         page.wait_for_url("**/dashboard**")
-        check("app.js?v=5.71.0" in page.content(), "cache-buster not bumped to 5.71.0")
+        check("app.js?v=5.72.0" in page.content(), "cache-buster not bumped to 5.72.0")
         page.click("a.nav-item[data-tab=candidates]")
         page.click("#btn-add-consultant-tab")
         page.wait_for_selector("#modal-consultant", state="visible")

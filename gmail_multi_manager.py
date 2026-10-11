@@ -324,7 +324,7 @@ def generate_consultant_pitch(candidate: Dict, job: Dict, custom_notes: str = ""
 
 
 def create_candidate_draft(candidate_id: int, job_id: int, custom_to_email: Optional[str] = None, custom_notes: str = "", custom_subject: Optional[str] = None, custom_body: Optional[str] = None, bcc: Optional[List[str]] = None, save_to_email: bool = True, attachment: Optional[Tuple[str, bytes]] = None, acting_user_id: Optional[int] = None,
-                          resume_version_id: Optional[int] = None) -> Dict[str, Any]:
+                          resume_version_id: Optional[int] = None, reply_to: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
     cand = models.get_candidate_by_id(candidate_id)
     if not cand:
         return {"success": False, "error": f"Candidate #{candidate_id} not found."}
@@ -351,6 +351,10 @@ def create_candidate_draft(candidate_id: int, job_id: int, custom_to_email: Opti
     sender_email = cand.get("gmail_account") or cand.get("email")
 
     subject = (custom_subject.strip() if custom_subject and custom_subject.strip() else build_subject(cand, job))
+    if reply_to and not (custom_subject and custom_subject.strip()):
+        # answering a requirement email: "Re: <their subject>" so it stays in the vendor's thread
+        their = (reply_to.get("subject") or "").strip()
+        subject = their if their.lower().startswith("re:") else f"Re: {their}" if their else subject
     body_text = (custom_body.strip() if custom_body and custom_body.strip() else generate_consultant_pitch(cand, job, custom_notes))
 
     msg = EmailMessage()
@@ -366,6 +370,9 @@ def create_candidate_draft(candidate_id: int, job_id: int, custom_to_email: Opti
     # reply is matched to this application and our answer lands in the same Gmail thread.
     message_id = make_msgid(domain=(sender_email or "jobhunt.local").rsplit("@", 1)[-1])
     msg["Message-ID"] = message_id
+    if reply_to and reply_to.get("message_id"):
+        msg["In-Reply-To"] = reply_to["message_id"]
+        msg["References"] = " ".join(x for x in (reply_to.get("references") or "", reply_to["message_id"]) if x).strip()
     # Plain text for clients that want it + the formatted HTML version (what Outlook / Gmail show).
     msg.set_content(body_text)
     msg.add_alternative(render_email_html(body_text), subtype="html")

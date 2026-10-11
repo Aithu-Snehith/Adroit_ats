@@ -21,6 +21,7 @@ import application_tracker
 import outreach_ai
 import regions
 import reply_inbox
+import inbox_requirements
 import work_backfill
 import threading
 import apify_service
@@ -1704,6 +1705,63 @@ def api_auto_reply_mode():
     return jsonify({"success": True, "mode": mode})
 
 
+_req_scans = {}      # candidate id -> running thread (one scan per consultant at a time, per worker)
+
+
+def _run_requirement_scan(cand_ids):
+    conn = models.get_db_connection()
+    try:
+        for cid in cand_ids:
+            cand = models.get_candidate_by_id(cid)
+            if cand:
+                try:
+                    inbox_requirements.scan_candidate(conn, cand)
+                except Exception as ex:
+                    logger.warning(f"Requirement scan for {cid} failed: {ex}")
+    finally:
+        conn.close()
+        for cid in cand_ids:
+            _req_scans.pop(cid, None)
+
+
+@app.route("/api/requirements", methods=["GET"])
+def api_requirements():
+    """Requirement emails found in the user's consultants' Gmail and what happened to each."""
+    user = current_user()
+    if not user:
+        return jsonify({"error": "Login required"}), 401
+    cid = _int_or_none(request.args.get("candidate_id"))
+    ids = _tracker_candidate_ids(user, cid)
+    if cid and not ids:
+        return jsonify({"error": "Consultant not found"}), 404
+    conn = models.get_db_connection()
+    try:
+        rows = inbox_requirements.list_for(conn, ids)
+    finally:
+        conn.close()
+    return jsonify({"requirements": rows, "scanning": any(i in _req_scans for i in ids), "min_match": inbox_requirements.MIN_MATCH})
+
+
+@app.route("/api/requirements/scan", methods=["POST"])
+def api_requirements_scan():
+    """Scan now (in the background - tailoring a resume takes up to a minute per requirement)."""
+    user = current_user()
+    if not user:
+        return jsonify({"error": "Login required"}), 401
+    cid = _int_or_none((request.get_json(silent=True) or {}).get("candidate_id"))
+    ids = [i for i in _tracker_candidate_ids(user, cid) if i not in _req_scans]
+    if cid and not _tracker_candidate_ids(user, cid):
+        return jsonify({"error": "Consultant not found"}), 404
+    with_gmail = [i for i in ids if (models.get_candidate_by_id(i) or {}).get("gmail_app_password")]
+    if not with_gmail:
+        return jsonify({"started": False, "message": "No consultant here has Gmail connected (App Password) - or a scan is already running."})
+    t = threading.Thread(target=_run_requirement_scan, args=(with_gmail,), daemon=True)
+    for i in with_gmail:
+        _req_scans[i] = t
+    t.start()
+    return jsonify({"started": True, "consultants": len(with_gmail)})
+
+
 def _reply_check_loop(minutes: float):
     """Every few minutes, check every consultant's Gmail for new recruiter replies (needs the server
     awake - a sleeping free Render instance pauses it; the "Check replies" buttons still work)."""
@@ -1715,9 +1773,13 @@ def _reply_check_loop(minutes: float):
                 cur = conn.cursor()
                 cur.execute("SELECT id FROM candidates WHERE gmail_app_password IS NOT NULL AND gmail_app_password <> ''")
                 cands = [models.get_candidate_by_id(r[0]) for r in cur.fetchall()]
-                out = reply_inbox.check_all(conn, [c for c in cands if c], time_budget_s=minutes * 60 * 0.8)
+                out = reply_inbox.check_all(conn, [c for c in cands if c], time_budget_s=minutes * 60 * 0.4)
                 if out["new_replies"]:
                     logger.info(f"Reply check: {out['new_replies']} new recruiter replies")
+                if os.getenv("REQUIREMENT_SCAN", "1") != "0":     # new requirement emails -> tailored drafts
+                    req = inbox_requirements.scan_all(conn, [c for c in cands if c], time_budget_s=minutes * 60 * 0.5)
+                    if req["drafted"]:
+                        logger.info(f"Requirement scan: {req['drafted']} drafts created")
             finally:
                 conn.close()
         except Exception as ex:
