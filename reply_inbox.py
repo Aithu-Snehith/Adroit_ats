@@ -21,6 +21,7 @@ import imaplib
 import json
 import logging
 import mimetypes
+import os
 import re
 import smtplib
 import time
@@ -228,7 +229,16 @@ def _move(cur, app_id: int, current: str, new: str, user_id, detail: str):
 # ---------------------------------------------------------------- AI
 
 def _ai(system: str, prompt: str):
+    """Replies, reply drafts and requirement emails use Gemini first (REPLY_AI_PROVIDER=gemini, the
+    default - its free tier keeps this high-volume work at no cost); if Gemini fails, the normal chain
+    (Claude, then the backups) answers. REPLY_AI_PROVIDER=claude uses the normal chain directly."""
     client, types = resume_bot._gemini_client() if resume_bot.gemini_configured() else (None, None)
+    if client is not None and os.getenv("REPLY_AI_PROVIDER", "gemini").strip().lower() == "gemini":
+        try:
+            raw, _, model = resume_bot._generate_gemini(client, types, system, prompt, want_json=True, max_tokens=1500)
+            return resume_bot._parse_json_object(raw) or {}, model
+        except Exception as ex:
+            logger.warning(f"Gemini failed for a reply task, using the backup AI: {resume_bot._explain_gemini_error(ex)}")
     raw, _, model = resume_bot._generate(client, types, system, prompt, want_json=True, max_tokens=1500)
     return resume_bot._parse_json_object(raw) or {}, model
 
