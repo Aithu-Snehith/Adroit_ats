@@ -20,6 +20,7 @@ import resume_versions
 import application_tracker
 import outreach_ai
 import regions
+import reply_inbox
 import work_backfill
 import threading
 import apify_service
@@ -1575,12 +1576,160 @@ def api_applications_check_replies():
         return jsonify({"error": "Consultant not found"}), 404
     conn = models.get_db_connection()
     try:
-        out = application_tracker.check_replies(conn, models.get_candidate_by_id(cid), user["id"])
+        out = reply_inbox.sync_candidate(conn, models.get_candidate_by_id(cid), user["id"])
     except application_tracker.TrackerError as ex:
         return jsonify({"error": str(ex)}), 400
     finally:
         conn.close()
     return jsonify({"success": True, **out})
+
+
+def _reply_for_user(user, reply_id):
+    conn = models.get_db_connection()
+    try:
+        r = reply_inbox.get(conn, reply_id)
+    finally:
+        conn.close()
+    return r if r and can_access_candidate(user, r["candidate_id"]) else None
+
+
+@app.route("/api/replies", methods=["GET"])
+def api_replies():
+    """Recruiter replies for the user's consultants (?candidate_id= one, ?open=1 only not handled)."""
+    user = current_user()
+    if not user:
+        return jsonify({"error": "Login required"}), 401
+    cid = _int_or_none(request.args.get("candidate_id"))
+    ids = _tracker_candidate_ids(user, cid)
+    if cid and not ids:
+        return jsonify({"error": "Consultant not found"}), 404
+    conn = models.get_db_connection()
+    try:
+        rows = reply_inbox.list_replies(conn, ids, unhandled_only=request.args.get("open") == "1")
+        mode = reply_inbox.owner_mode(conn, {"assigned_user_id": user["id"]})
+    finally:
+        conn.close()
+    return jsonify({"replies": rows, "mode": mode, "modes": reply_inbox.MODES})
+
+
+@app.route("/api/replies/<int:reply_id>", methods=["GET"])
+def api_reply_get(reply_id):
+    user = current_user()
+    if not user:
+        return jsonify({"error": "Login required"}), 401
+    r = _reply_for_user(user, reply_id)
+    return jsonify(r) if r else (jsonify({"error": "Reply not found"}), 404)
+
+
+@app.route("/api/replies/<int:reply_id>/ai", methods=["POST"])
+def api_reply_ai(reply_id):
+    """Chat: the AI writes / edits the answer to this reply, from facts on file only."""
+    user = current_user()
+    if not user:
+        return jsonify({"error": "Login required"}), 401
+    r = _reply_for_user(user, reply_id)
+    if not r:
+        return jsonify({"error": "Reply not found"}), 404
+    data = request.get_json(silent=True) or {}
+    out = reply_inbox.draft_reply(models.get_candidate_by_id(r["candidate_id"]) or {}, models.get_job_by_id(r["job_id"]) or {}, r,
+                                  instruction=str(data.get("instruction") or "").strip()[:1000],
+                                  current=str(data.get("current_body") or "").strip())
+    return jsonify(out)
+
+
+@app.route("/api/replies/<int:reply_id>/save-draft", methods=["POST"])
+def api_reply_save_draft(reply_id):
+    """Save the answer as a Gmail draft in the recruiter's thread (someone presses Send in Gmail)."""
+    user = current_user()
+    if not user:
+        return jsonify({"error": "Login required"}), 401
+    r = _reply_for_user(user, reply_id)
+    if not r:
+        return jsonify({"error": "Reply not found"}), 404
+    data = request.get_json(silent=True) or {}
+    conn = models.get_db_connection()
+    try:
+        out = reply_inbox.save_reply_draft(conn, reply_id, str(data.get("body") or ""), user, attach_resume=bool(data.get("attach_resume")))
+    except (reply_inbox.ReplyError, application_tracker.TrackerError) as ex:
+        return jsonify({"error": str(ex)}), 400
+    finally:
+        conn.close()
+    return jsonify(out)
+
+
+@app.route("/api/replies/<int:reply_id>/handled", methods=["POST"])
+def api_reply_handled(reply_id):
+    user = current_user()
+    if not user:
+        return jsonify({"error": "Login required"}), 401
+    if not _reply_for_user(user, reply_id):
+        return jsonify({"error": "Reply not found"}), 404
+    conn = models.get_db_connection()
+    try:
+        reply_inbox.set_handled(conn, reply_id, bool((request.get_json(silent=True) or {}).get("handled", True)))
+    finally:
+        conn.close()
+    return jsonify({"success": True})
+
+
+@app.route("/api/replies/check-all", methods=["POST"])
+def api_replies_check_all():
+    """Check every consultant's Gmail (that the user can see) for new recruiter replies now."""
+    user = current_user()
+    if not user:
+        return jsonify({"error": "Login required"}), 401
+    ids = set(_tracker_candidate_ids(user))
+    conn = models.get_db_connection()
+    try:
+        cands = [models.get_candidate_by_id(i) for i in ids]
+        out = reply_inbox.check_all(conn, [c for c in cands if c])
+    finally:
+        conn.close()
+    return jsonify(out)
+
+
+@app.route("/api/me/auto-reply-mode", methods=["POST"])
+def api_auto_reply_mode():
+    """The recruiter's own setting: off / draft (prepare replies) / send_safe (send resume-request answers)."""
+    user = current_user()
+    if not user:
+        return jsonify({"error": "Login required"}), 401
+    conn = models.get_db_connection()
+    try:
+        mode = reply_inbox.set_mode(conn, user["id"], str((request.get_json(silent=True) or {}).get("mode") or ""))
+    except reply_inbox.ReplyError as ex:
+        return jsonify({"error": str(ex)}), 400
+    finally:
+        conn.close()
+    return jsonify({"success": True, "mode": mode})
+
+
+def _reply_check_loop(minutes: float):
+    """Every few minutes, check every consultant's Gmail for new recruiter replies (needs the server
+    awake - a sleeping free Render instance pauses it; the "Check replies" buttons still work)."""
+    time.sleep(90)
+    while True:
+        try:
+            conn = models.get_db_connection()
+            try:
+                cur = conn.cursor()
+                cur.execute("SELECT id FROM candidates WHERE gmail_app_password IS NOT NULL AND gmail_app_password <> ''")
+                cands = [models.get_candidate_by_id(r[0]) for r in cur.fetchall()]
+                out = reply_inbox.check_all(conn, [c for c in cands if c], time_budget_s=minutes * 60 * 0.8)
+                if out["new_replies"]:
+                    logger.info(f"Reply check: {out['new_replies']} new recruiter replies")
+            finally:
+                conn.close()
+        except Exception as ex:
+            logger.warning(f"Reply check failed: {ex}")
+        time.sleep(minutes * 60)
+
+
+# Automatic reply checks: REPLY_CHECK_MINUTES (default 20 on the live server - the one with a
+# DATABASE_URL; off locally and in tests so nothing logs in to a real Gmail by accident).
+_reply_minutes = float(os.getenv("REPLY_CHECK_MINUTES", "20" if config.DATABASE_URL else "0") or 0)
+if _reply_minutes > 0:
+    threading.Thread(target=_reply_check_loop, args=(_reply_minutes,), daemon=True).start()
 
 
 @app.route("/api/applications/export-xlsx", methods=["GET"])

@@ -8,10 +8,8 @@ round, notes - and every change in `application_events` (who, when, what).
 Statuses are stored in `applications.stage` (the existing board keys stay valid) and shown with
 the recruiter's wording via STATUS_LABELS. Applications are created automatically by drafts
 (models.mark_job_drafted) and the Jobs "Applied" dropdown, or by hand for applications made outside
-the app. check_replies() reads the consultant's connected Gmail (read-only) for mail FROM each
-open application's recruiter address and moves it to "Recruiter responded".
+the app. Recruiter replies are read, sorted and answered by reply_inbox.py.
 """
-import imaplib
 import io
 import re
 from datetime import date, datetime, timedelta
@@ -118,7 +116,11 @@ _SELECT = """SELECT a.id, a.job_id, a.candidate_id, a.user_id, a.stage, a.notes,
                     a.resume_version_id, a.follow_up_date, a.interview_at, a.interview_round, a.last_reply_at,
                     j.title AS job_title, j.company AS job_company, j.location AS job_location, j.url AS job_url, j.source AS job_source,
                     j.recruiter_email AS job_recruiter_email, j.apply_status,
-                    c.name AS candidate_name, r.filename AS resume_filename
+                    c.name AS candidate_name, r.filename AS resume_filename,
+                    (SELECT COUNT(*) FROM application_replies x WHERE x.application_id = a.id
+                     AND COALESCE(x.category, '') <> 'auto_reply') AS reply_count,
+                    (SELECT COUNT(*) FROM application_replies x WHERE x.application_id = a.id
+                     AND COALESCE(x.handled, 0) = 0) AS replies_open
              FROM applications a JOIN jobs j ON j.id = a.job_id JOIN candidates c ON c.id = a.candidate_id
              LEFT JOIN optimized_resumes r ON r.id = a.resume_version_id"""
 
@@ -182,50 +184,6 @@ def events(conn, app_id: int) -> List[Dict]:
 
 
 # ---------------------------------------------------------------- Gmail replies (read-only)
-
-def _gmail_date(d: str) -> str:
-    try:
-        return datetime.strptime(d[:10], "%Y-%m-%d").strftime("%d-%b-%Y")
-    except ValueError:
-        return (datetime.utcnow() - timedelta(days=60)).strftime("%d-%b-%Y")
-
-
-def check_replies(conn, cand: Dict, user_id: int, imap_factory=None) -> Dict:
-    """Search the consultant's Gmail INBOX (read-only) for mail FROM each open application's recruiter
-    address since it was drafted / applied. A hit moves 'Draft created' / 'Applied' to 'Recruiter
-    responded' and records when. Nothing in Gmail is changed (EXAMINE = read-only, no message bodies)."""
-    account, password = (cand.get("gmail_account") or "").strip(), (cand.get("gmail_app_password") or "").replace(" ", "")
-    if not (account and password):
-        raise TrackerError("This consultant has no Gmail connected (App Password) - connect it on the Consultants tab.")
-    rows = [r for r in list_for(conn, [cand["id"]]) if r["stage"] in ("Drafted", "Applied") and "@" in (r["recruiter_email"] or "")]
-    if not rows:
-        return {"checked": 0, "replied": []}
-    try:
-        mail = (imap_factory or imaplib.IMAP4_SSL)("imap.gmail.com", 993)   # looked up at call time
-        mail.login(account, password)
-        mail.select("INBOX", readonly=True)
-    except Exception as ex:
-        raise TrackerError(f"Could not open {account} (read-only): {str(ex)[:120]}")
-    replied = []
-    cur = conn.cursor()
-    try:
-        for r in rows:
-            since = _gmail_date(r["applied_date"] or r["drafted_at"] or "")
-            addr = r["recruiter_email"].strip().replace('"', "")
-            typ, data = mail.search(None, "FROM", f'"{addr}"', "SINCE", since)
-            if typ == "OK" and data and data[0].split():
-                cur.execute("UPDATE applications SET stage = 'Responded', last_reply_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-                            (r["id"],))
-                event(cur, r["id"], user_id, "reply", f"Reply found in {account} from {addr}")
-                replied.append({"id": r["id"], "job_title": r["job_title"], "from": addr})
-        conn.commit()
-    finally:
-        try:
-            mail.logout()
-        except Exception:
-            pass
-    return {"checked": len(rows), "replied": replied}
-
 
 # ---------------------------------------------------------------- Excel
 

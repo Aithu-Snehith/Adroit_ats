@@ -62,7 +62,8 @@ class FakeIMAP:
 
 
 gm.imaplib.IMAP4_SSL = FakeIMAP
-assert at.imaplib.IMAP4_SSL is FakeIMAP
+import reply_inbox  # noqa: E402
+assert reply_inbox.imaplib.IMAP4_SSL is FakeIMAP
 
 EMAIL, PASSWORD = "trkui@example.invalid", "TrkUi-Test-1"
 admin = models.create_user("Tracker UI Admin", EMAIL, PASSWORD, role="Admin")
@@ -112,7 +113,7 @@ try:
         page.fill("input[name=password]", PASSWORD)
         page.click("button[type=submit]")
         page.wait_for_url("**/dashboard**")
-        check("app.js?v=5.70.0" in page.content(), "cache-buster not bumped to 5.70.0")
+        check("app.js?v=5.71.0" in page.content(), "cache-buster not bumped to 5.71.0")
         page.wait_for_function("state.consultants && state.consultants.length >= 2", timeout=15000)
 
         # Consultants -> Applications (Visakh)

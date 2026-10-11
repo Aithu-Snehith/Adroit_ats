@@ -67,7 +67,7 @@ try:
         page.fill("input[name=password]", PASSWORD)
         page.click("button[type=submit]")
         page.wait_for_url("**/dashboard**")
-        check("app.js?v=5.70.0" in page.content(), "cache-buster not bumped to 5.70.0")
+        check("app.js?v=5.71.0" in page.content(), "cache-buster not bumped to 5.71.0")
         page.click("a.nav-item[data-tab=jobs]")
         page.fill("#filter-query", "data analyst")
         page.click("#btn-search-jobs")

@@ -66,8 +66,8 @@ class FakeIMAP:
 
 
 gm.imaplib.IMAP4_SSL = FakeIMAP
-at.imaplib.IMAP4_SSL = FakeIMAP   # same module - never a real Gmail login
-assert at.imaplib.IMAP4_SSL is FakeIMAP
+import reply_inbox  # noqa: E402
+assert reply_inbox.imaplib.IMAP4_SSL is FakeIMAP   # same module - never a real Gmail login
 uid = lambda u: u["id"] if isinstance(u, dict) else u  # noqa: E731
 rec = {"id": uid(models.create_user("Track Rec", "trk-rec@example.invalid", "Trk-1", role="Recruiter")), "name": "Track Rec", "role": "Recruiter"}
 other = {"id": uid(models.create_user("Track Other", "trk-other@example.invalid", "Trk-2", role="Recruiter")), "name": "Track Other", "role": "Recruiter"}
@@ -150,7 +150,11 @@ check(len(apps(candidate_id=cid, status="Applied")["applications"]) == 2, "statu
 jd_ = job("DevOps D Tracktest", "rec-a@vendor.example")
 client.post("/api/outreach/create-draft", json={"candidate_id": cid, "job_id": jd_})
 r = client.post("/api/applications/check-replies", json={"candidate_id": cid}).get_json()
-check(r.get("success") and [x["from"] for x in r.get("replied", [])] == ["rec-a@vendor.example"] and r["checked"] == 3, f"replies: {r}")
+ja_app_id = lambda: next(x["id"] for x in apps(candidate_id=cid)["applications"] if x["job_id"] == ja)  # noqa: E731
+jd_app_id = lambda: next(x["id"] for x in apps(candidate_id=cid)["applications"] if x["job_id"] == jd_)  # noqa: E731
+# applications already at Interview are watched too (follow-up emails), but never moved back
+check(r.get("success") and sorted(x["id"] for x in r.get("replied", [])) == sorted([ja_app_id(), jd_app_id()]) and r["checked"] == 4, f"replies: {r}")
+check(next(x for x in apps(candidate_id=cid)["applications"] if x["job_id"] == ja)["status_label"] == "Interview", "Interview stays Interview")
 check(all(ro for _, ro in FakeIMAP.selected) and FakeIMAP.selected, f"INBOX opened read-only: {FakeIMAP.selected}")
 dapp = next(x for x in apps(candidate_id=cid)["applications"] if x["job_id"] == jd_)
 check(dapp["status_label"] == "Recruiter responded" and dapp["last_reply_at"], f"marked responded: {dapp}")

@@ -5102,6 +5102,7 @@ function trkWire() {
     $('trk-a-cancel').addEventListener('click', () => { $('trk-add').style.display = 'none'; });
     $('trk-a-save').addEventListener('click', trkAddSave);
     $('trk-replies-btn').addEventListener('click', trkCheckReplies);
+    $('trk-open-replies').addEventListener('click', () => openReplies(trk.candId || ''));
 }
 
 function trkMsg(text, kind) {
@@ -5161,10 +5162,13 @@ function trkRender() {
             <td><input type="date" class="form-control trk-f" data-f="interview_at" value="${escapeHtml((r.interview_at || '').slice(0, 10))}" style="font-size:0.8rem;">
                 <input class="form-control trk-f" data-f="interview_round" value="${escapeHtml(r.interview_round || '')}" placeholder="round" style="font-size:0.75rem; margin-top:3px;"></td>
             <td><textarea class="form-control trk-f" data-f="notes" rows="2" style="font-size:0.78rem; min-width:140px;">${escapeHtml(r.notes || '')}</textarea></td>
-            <td><button type="button" class="btn btn-secondary btn-xs trk-hist">History</button></td>
+            <td style="white-space:nowrap;"><button type="button" class="btn btn-secondary btn-xs trk-hist">History</button>
+                ${r.reply_count ? `<button type="button" class="btn btn-secondary btn-xs trk-rp" data-cand="${r.candidate_id}" title="Recruiter replies" style="margin-top:3px; ${r.replies_open ? 'border-color:#f59e0b; background:#fffbeb;' : ''}">💬 ${r.reply_count}${r.replies_open ? ' new' : ''}</button>` : ''}</td>
         </tr>`).join('');
     body.querySelectorAll('.trk-f').forEach(el => el.addEventListener('change', () => trkSave(el)));
     body.querySelectorAll('.trk-hist').forEach(b => b.addEventListener('click', () => trkHistory(b.closest('tr'))));
+    body.querySelectorAll('.trk-rp').forEach(b => b.addEventListener('click', () =>
+        openReplies(b.getAttribute('data-cand'), parseInt(b.closest('tr').getAttribute('data-app-id')))));
 }
 
 async function trkSave(el) {
@@ -5214,10 +5218,181 @@ async function trkCheckReplies() {
             body: JSON.stringify({ candidate_id: parseInt(trk.candId) }) });
         const d = await res.json().catch(() => ({}));
         if (!res.ok) { trkMsg(d.error || 'Could not check replies.', 'err'); return; }
-        trkMsg(d.replied.length
-            ? `${d.replied.length} new repl${d.replied.length === 1 ? 'y' : 'ies'}: ${d.replied.map(r => r.job_title).join(', ')} - marked "Recruiter responded".`
-            : `Checked ${d.checked} open application${d.checked === 1 ? '' : 's'} - no new replies.`, d.replied.length ? 'ok' : '');
+        trkMsg(d.new_replies
+            ? `${d.new_replies} new repl${d.new_replies === 1 ? 'y' : 'ies'} read and sorted (${d.replied.map(r => r.job_title).join(', ')}) - open 📨 Replies to answer.`
+            : `Checked ${d.checked} open application${d.checked === 1 ? '' : 's'} - no new replies.`, d.new_replies ? 'ok' : '');
         trkLoad();
+    } finally { btn.disabled = false; }
+}
+
+// =========================================================================
+// Recruiter replies (reply_inbox.py): read, sorted by AI, answered with AI, saved in the Gmail thread.
+// =========================================================================
+const rp = { wired: false, rows: [], current: null, focusApp: null };
+const RP_CAT_COLORS = { interview: '#dcfce7', question: '#e0f2fe', needs_resume: '#ede9fe', rejection: '#fee2e2', auto_reply: '#f1f5f9', other: '#f1f5f9' };
+
+function openReplies(candId, focusAppId) {
+    const $ = id => document.getElementById(id);
+    rpWire();
+    $('rp-consultant').innerHTML = '<option value="">All my consultants</option>' + (state.consultants || [])
+        .map(c => `<option value="${c.id}">${escapeHtml(c.name)}</option>`).join('');
+    $('rp-consultant').value = candId ? String(candId) : '';
+    rp.focusApp = focusAppId || null;
+    $('rp-open').checked = !focusAppId;
+    $('rp-msg').innerHTML = '';
+    $('rp-detail').innerHTML = '<div style="color:#64748b; font-size:0.9rem;">Pick a reply on the left.</div>';
+    $('modal-replies').style.display = 'flex';
+    rpLoad();
+}
+
+function rpWire() {
+    if (rp.wired) return;
+    rp.wired = true;
+    const $ = id => document.getElementById(id);
+    $('btn-close-replies').addEventListener('click', () => { $('modal-replies').style.display = 'none'; if (document.getElementById('modal-tracker').style.display === 'flex') trkLoad(); });
+    ['rp-consultant', 'rp-open'].forEach(id => $(id).addEventListener('change', rpLoad));
+    $('rp-check').addEventListener('click', rpCheck);
+    $('rp-mode').addEventListener('change', async () => {
+        const res = await fetch('/api/me/auto-reply-mode', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ mode: $('rp-mode').value }) });
+        const d = await res.json().catch(() => ({}));
+        showToast(res.ok ? 'Auto-reply setting saved' : (d.error || 'Could not save'), res.ok ? 'success' : 'error');
+    });
+    $('rp-list').addEventListener('click', (e) => { const it = e.target.closest('.rp-item'); if (it) rpOpen(parseInt(it.getAttribute('data-id'))); });
+}
+
+function rpMsg(text, kind) {
+    const colors = { ok: '#059669', warn: '#b45309', err: '#b91c1c' };
+    document.getElementById('rp-msg').innerHTML = text ? `<span style="color:${colors[kind] || '#475569'};">${escapeHtml(text)}</span>` : '';
+}
+
+async function rpLoad() {
+    const $ = id => document.getElementById(id);
+    const p = new URLSearchParams();
+    if ($('rp-consultant').value) p.set('candidate_id', $('rp-consultant').value);
+    if ($('rp-open').checked) p.set('open', '1');
+    const res = await fetch('/api/replies?' + p.toString());
+    const d = await res.json().catch(() => ({}));
+    if (!res.ok) { rpMsg(d.error || 'Could not load replies.', 'err'); return; }
+    rp.rows = d.replies || [];
+    if (!$('rp-mode').options.length) {   // filled once: a list refresh never overwrites the choice being saved
+        $('rp-mode').innerHTML = Object.entries(d.modes || {}).map(([k, v]) => `<option value="${k}" ${k === d.mode ? 'selected' : ''}>${escapeHtml(v)}</option>`).join('');
+    }
+    const rows = rp.focusApp ? [...rp.rows.filter(r => r.application_id === rp.focusApp), ...rp.rows.filter(r => r.application_id !== rp.focusApp)] : rp.rows;
+    $('rp-list').innerHTML = rows.length ? rows.map(r => `
+        <div class="rp-item" data-id="${r.id}" style="padding:10px 12px; border-bottom:1px solid #f1f5f9; cursor:pointer; ${r.handled ? 'opacity:0.65;' : ''}">
+            <div style="display:flex; justify-content:space-between; gap:6px;"><b style="font-size:0.85rem; color:#0f172a;">${escapeHtml(r.from_name || r.from_email)}</b>
+                <span style="font-size:0.72rem; color:#64748b; white-space:nowrap;">${escapeHtml((r.received_at || '').slice(0, 16))}</span></div>
+            <div style="font-size:0.8rem; color:#334155; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${escapeHtml(r.subject || '')}</div>
+            <div style="font-size:0.75rem; color:#64748b;">${escapeHtml(r.candidate_name || '')} · ${escapeHtml(r.job_title || '')}</div>
+            <span style="display:inline-block; margin-top:4px; font-size:0.7rem; font-weight:700; padding:1px 8px; border-radius:999px; background:${RP_CAT_COLORS[r.category] || '#f1f5f9'}; color:#0f172a;">${escapeHtml(r.category_label)}</span>
+            ${r.sent_at ? '<span style="font-size:0.7rem; color:#059669; font-weight:700; margin-left:4px;">✓ answered automatically</span>' : r.gmail_draft_at ? '<span style="font-size:0.7rem; color:#059669; font-weight:700; margin-left:4px;">✓ draft in Gmail</span>' : r.has_draft ? '<span style="font-size:0.7rem; color:#2563eb; font-weight:700; margin-left:4px;">✎ reply ready</span>' : ''}
+        </div>`).join('') : '<div style="padding:16px; color:#64748b; font-size:0.85rem;">No replies here yet. Click "Check Gmail now" - or turn off "Only not handled".</div>';
+    if (rp.focusApp) {   // from a tracker badge: open that application's real reply (not an out-of-office)
+        const mine = rows.filter(r => r.application_id === rp.focusApp);
+        const pick = mine.find(r => r.category !== 'auto_reply' && !r.handled) || mine.find(r => r.category !== 'auto_reply') || mine[0];
+        rp.focusApp = null;
+        if (pick) rpOpen(pick.id);
+    }
+}
+
+async function rpOpen(id) {
+    const res = await fetch(`/api/replies/${id}`);
+    const r = await res.json().catch(() => ({}));
+    if (!res.ok) { rpMsg(r.error || 'Could not open the reply.', 'err'); return; }
+    rp.current = r;
+    rp.undo = [];
+    document.querySelectorAll('.rp-item').forEach(el => { el.style.background = parseInt(el.getAttribute('data-id')) === id ? '#eff6ff' : ''; });
+    const L = 'font-size:0.72rem; font-weight:700; color:#64748b; text-transform:uppercase; letter-spacing:0.04em; margin:12px 0 4px;';
+    const chip = (t) => `<button type="button" class="btn-prompt-chip rp-chip">${escapeHtml(t)}</button>`;
+    document.getElementById('rp-detail').innerHTML = `
+        <div style="display:flex; justify-content:space-between; gap:10px; align-items:flex-start;">
+            <div><div style="font-weight:800; color:#0f172a;">${escapeHtml(r.subject || '')}</div>
+                <div style="font-size:0.8rem; color:#475569;">From ${escapeHtml(r.from_name ? `${r.from_name} <${r.from_email}>` : r.from_email)} · ${escapeHtml(r.received_at || '')}</div>
+                <div style="font-size:0.8rem; color:#475569;">${escapeHtml(r.candidate_name || '')} → ${escapeHtml(r.job_title || '')} (${escapeHtml(r.job_company || '')})</div></div>
+            <span style="font-size:0.75rem; font-weight:700; padding:2px 10px; border-radius:999px; background:${RP_CAT_COLORS[r.category] || '#f1f5f9'}; white-space:nowrap;" title="${escapeHtml(r.category_reason || '')}">${escapeHtml(r.category_label)}</span>
+        </div>
+        ${r.category_reason ? `<div style="font-size:0.78rem; color:#64748b; margin-top:4px;">AI: ${escapeHtml(r.category_reason)}</div>` : ''}
+        <div style="${L}">Recruiter wrote</div>
+        <div id="rp-body" style="white-space:pre-wrap; font-size:0.85rem; color:#0f172a; background:#f8fafc; border:1px solid #e2e8f0; border-radius:8px; padding:10px; max-height:200px; overflow-y:auto;">${escapeHtml(r.body || '(no text)')}</div>
+        <div style="${L}">Your reply ${r.gmail_draft_at ? '<span style="color:#059669; text-transform:none;">- saved as a Gmail draft ' + escapeHtml(String(r.gmail_draft_at).slice(0, 16)) + '</span>' : ''}${r.sent_at ? '<span style="color:#059669; text-transform:none;"> - sent automatically ' + escapeHtml(String(r.sent_at).slice(0, 16)) + '</span>' : ''}</div>
+        ${r.draft_note ? `<div id="rp-note" style="font-size:0.78rem; color:#92400e; background:#fffbeb; border:1px solid #fde68a; border-radius:8px; padding:6px 8px; margin-bottom:6px;">${escapeHtml(r.draft_note)}</div>` : '<div id="rp-note"></div>'}
+        <textarea id="rp-draft" rows="8" class="form-control" style="width:100%; font-size:0.85rem; line-height:1.5;" placeholder="Write the reply, or ask the AI below.">${escapeHtml(r.draft_body || '')}</textarea>
+        <div style="display:flex; gap:6px; flex-wrap:wrap; margin-top:8px;">${chip('Write a reply')}${chip('Shorter')}${chip('Share availability for a call')}${chip('Say the resume is attached')}${chip('Politely ask for the rate and client name')}</div>
+        <div style="display:flex; gap:8px; margin-top:8px;">
+            <input id="rp-instr" class="form-control" placeholder="Tell the AI what to say, e.g. 'He can talk Tuesday 2-5 PM IST'" style="flex:1;">
+            <button type="button" class="btn btn-primary btn-sm" id="rp-ai">Ask AI</button>
+            <button type="button" class="btn btn-secondary btn-sm" id="rp-undo" disabled>↶ Undo</button>
+        </div>
+        <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin-top:12px; padding-top:10px; border-top:1px solid #f1f5f9;">
+            <label style="display:flex; align-items:center; gap:6px; font-size:0.82rem; margin:0; text-transform:none; font-weight:500;"><input type="checkbox" id="rp-attach" ${r.category === 'needs_resume' ? 'checked' : ''}> Attach resume</label>
+            <span style="flex:1"></span>
+            <button type="button" class="btn btn-secondary btn-sm" id="rp-handled">${r.handled ? 'Mark not handled' : 'Mark handled'}</button>
+            <button type="button" class="btn btn-primary btn-sm" id="rp-save">🚀 Save reply to Gmail (same thread)</button>
+        </div>
+        <div style="font-size:0.75rem; color:#94a3b8; margin-top:6px;">The reply is saved in the consultant's Gmail Drafts as "Re: ..." in this recruiter's thread - open Gmail and press Send.</div>`;
+    const $ = id => document.getElementById(id);
+    document.querySelectorAll('.rp-chip').forEach(b => b.addEventListener('click', () => rpAi(b.textContent)));
+    $('rp-ai').addEventListener('click', () => rpAi($('rp-instr').value.trim()));
+    $('rp-instr').addEventListener('keydown', (e) => { if (e.key === 'Enter') rpAi($('rp-instr').value.trim()); });
+    $('rp-undo').addEventListener('click', () => { const prev = rp.undo.pop(); if (prev !== undefined) $('rp-draft').value = prev; $('rp-undo').disabled = !rp.undo.length; });
+    $('rp-save').addEventListener('click', rpSave);
+    $('rp-handled').addEventListener('click', async () => {
+        await fetch(`/api/replies/${r.id}/handled`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ handled: !r.handled }) });
+        rpLoad(); rpOpen(r.id);
+    });
+}
+
+async function rpAi(instruction) {
+    if (!rp.current || !instruction) return;
+    const $ = id => document.getElementById(id);
+    const btn = $('rp-ai');
+    btn.disabled = true; btn.textContent = 'Thinking...';
+    try {
+        const current = $('rp-draft').value;
+        const res = await fetch(`/api/replies/${rp.current.id}/ai`, { method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ instruction, current_body: current }) });
+        const d = await res.json().catch(() => ({}));
+        if (!res.ok) { rpMsg(d.error || 'The AI could not answer.', 'err'); return; }
+        const notes = [d.note, ...(d.needs_info || []).map(q => '❓ ' + q)].filter(Boolean);
+        $('rp-note').innerHTML = notes.length ? `<div style="font-size:0.78rem; color:${d.applied ? '#334155' : '#92400e'}; background:${d.applied ? '#f1f5f9' : '#fffbeb'}; border:1px solid ${d.applied ? '#e2e8f0' : '#fde68a'}; border-radius:8px; padding:6px 8px; margin-bottom:6px;">${notes.map(escapeHtml).join('<br>')}</div>` : '';
+        if (d.applied) {
+            rp.undo.push(current);
+            $('rp-undo').disabled = false;
+            $('rp-draft').value = d.body;
+            $('rp-instr').value = '';
+        }
+    } finally { btn.disabled = false; btn.textContent = 'Ask AI'; }
+}
+
+async function rpSave() {
+    const $ = id => document.getElementById(id);
+    const btn = $('rp-save');
+    btn.disabled = true;
+    try {
+        const res = await fetch(`/api/replies/${rp.current.id}/save-draft`, { method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ body: $('rp-draft').value, attach_resume: $('rp-attach').checked }) });
+        const d = await res.json().catch(() => ({}));
+        if (!res.ok) { showToast(d.error || 'Could not save the draft.', 'error', 7000); return; }
+        showToast(`Reply saved in Gmail Drafts (same thread)${d.attached ? ' with ' + d.attached : ''} - open Gmail to send it.`, 'success', 7000);
+        rpLoad();
+        rpOpen(rp.current.id);
+    } finally { btn.disabled = false; }
+}
+
+async function rpCheck() {
+    const $ = id => document.getElementById(id);
+    const btn = $('rp-check');
+    btn.disabled = true;
+    rpMsg('Reading recruiter replies from Gmail (nothing is marked read or changed)...', '');
+    try {
+        const cid = $('rp-consultant').value;
+        const res = cid
+            ? await fetch('/api/applications/check-replies', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ candidate_id: parseInt(cid) }) })
+            : await fetch('/api/replies/check-all', { method: 'POST' });
+        const d = await res.json().catch(() => ({}));
+        if (!res.ok) { rpMsg(d.error || 'Could not check Gmail.', 'err'); return; }
+        rpMsg(`${d.new_replies || 0} new repl${d.new_replies === 1 ? 'y' : 'ies'}.` + ((d.errors || []).length ? ' Problems: ' + d.errors.join('; ') : ''), d.new_replies ? 'ok' : '');
+        rpLoad();
     } finally { btn.disabled = false; }
 }
 

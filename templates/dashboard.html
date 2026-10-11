@@ -645,6 +645,7 @@
                             <p>Track all drafted and submitted applications across all consultant Gmail accounts. Review draft timestamps, recruiter contacts, and target roles.</p>
                         </div>
                         <button type="button" class="btn btn-primary btn-sm" id="btn-open-tracker-all" onclick="openTracker('')">📋 All applications</button>
+                        <button type="button" class="btn btn-secondary btn-sm" id="btn-open-replies-all" onclick="openReplies('')">📨 Recruiter replies</button>
                     </div>
 
                     <div class="pipeline-kanban" id="pipeline-container">
@@ -1239,6 +1240,33 @@
 
 
     <!-- MODAL: application tracker (application_tracker.py) -->
+    <!-- Recruiter replies: read, sort, answer with AI, save as a Gmail draft in the same thread (reply_inbox.py) -->
+    <div class="modal-backdrop" id="modal-replies" style="display: none; z-index: 1150;">
+        <div class="modal-dialog" style="max-width: 1200px; width: 96vw;">
+            <div class="modal-header">
+                <h3>📨 Recruiter replies</h3>
+                <button class="modal-close" type="button" id="btn-close-replies">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div style="display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin-bottom:10px;">
+                    <select id="rp-consultant" class="form-control" style="max-width:240px;"></select>
+                    <label style="display:flex; align-items:center; gap:6px; font-size:0.85rem; margin:0; text-transform:none; font-weight:500;"><input type="checkbox" id="rp-open" checked> Only not handled</label>
+                    <button type="button" class="btn btn-secondary btn-sm" id="rp-check">✉ Check Gmail now</button>
+                    <span style="flex:1"></span>
+                    <label for="rp-mode" style="font-size:0.8rem; margin:0; text-transform:none; font-weight:600; color:#334155;">My auto-replies:</label>
+                    <select id="rp-mode" class="form-control" style="max-width:220px;" title="Off: just collect replies. Prepare reply drafts: the AI writes an answer for you to check. Send safe replies: answers to 'please send your resume' go out automatically with the resume; everything else waits for you."></select>
+                </div>
+                <div id="rp-msg" style="font-size:0.85rem; margin-bottom:8px;"></div>
+                <div style="display:grid; grid-template-columns: minmax(260px, 0.9fr) 1.6fr; gap:14px; min-height:420px;">
+                    <div id="rp-list" style="border:1px solid #e2e8f0; border-radius:10px; overflow-y:auto; max-height:62vh;"></div>
+                    <div id="rp-detail" style="border:1px solid #e2e8f0; border-radius:10px; padding:14px; overflow-y:auto; max-height:62vh;">
+                        <div style="color:#64748b; font-size:0.9rem;">Pick a reply on the left.</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <div class="modal-backdrop" id="modal-tracker" style="display: none; z-index: 1140;">
         <div class="modal-dialog" style="max-width: 1320px; width: 97vw;">
             <div class="modal-header">
@@ -1254,7 +1282,8 @@
                     </label>
                     <span style="flex:1"></span>
                     <button type="button" class="btn btn-secondary btn-sm" id="trk-add-btn">+ Add application</button>
-                    <button type="button" class="btn btn-secondary btn-sm" id="trk-replies-btn" title="Read-only check of the consultant's Gmail for replies from each recruiter">✉ Check Gmail replies</button>
+                    <button type="button" class="btn btn-secondary btn-sm" id="trk-replies-btn" title="Reads recruiter replies from the consultant's Gmail (nothing is marked read or changed)">✉ Check Gmail replies</button>
+                    <button type="button" class="btn btn-secondary btn-sm" id="trk-open-replies" title="Read recruiter replies and answer them with AI">📨 Replies</button>
                     <a class="btn btn-primary btn-sm" id="trk-export" href="#">⬇ Excel</a>
                 </div>
                 <div id="trk-summary" style="display:flex; flex-wrap:wrap; gap:8px; margin-bottom:10px;"></div>
@@ -1372,7 +1401,7 @@
     <aside id="trk-drawer" aria-label="Candidate tracking card" style="position:fixed; top:0; right:0; height:100vh; width:min(480px, 100vw); background:#ffffff; box-shadow:-12px 0 30px rgba(15,23,42,0.18); z-index:1201; transform:translateX(105%); transition:transform 0.2s ease; overflow-y:auto; box-sizing:border-box;"></aside>
     <script>window.CURRENT_USER = {{ {'id': user.id, 'admin': ('Admin' in (user.role or ''))} | tojson }};
         window.VIEW_REGION = {{ view_region | tojson }};</script>
-    <script src="/static/js/app.js?v=5.70.0"></script>
+    <script src="/static/js/app.js?v=5.71.0"></script>
 
     <!-- Recruiter Management Inline Fallback: app.js defines all of these with toast-based
          feedback and no page reloads. These only fire if app.js somehow failed to load -

@@ -439,6 +439,32 @@ def init_db():
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     );
     """)
+    # Recruiter replies to applications, read from the consultant's Gmail (reply_inbox.py): the text,
+    # the AI's sorting (interview / question / ...), the prepared reply and what was done with it.
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS application_replies (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        application_id INTEGER NOT NULL,
+        candidate_id INTEGER NOT NULL,
+        message_id TEXT NOT NULL,
+        in_reply_to TEXT,
+        references_hdr TEXT,
+        from_email TEXT,
+        from_name TEXT,
+        subject TEXT,
+        received_at TEXT,
+        body TEXT,
+        category TEXT,
+        category_reason TEXT,
+        ai_model TEXT,
+        draft_body TEXT,
+        draft_note TEXT,
+        gmail_draft_at TEXT,
+        sent_at TEXT,
+        handled INTEGER DEFAULT 0,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+    """)
     # Sourcing tracker: recruiters' comments on a sourced candidate (and a record of every status
     # change, kind = 'status'). Team-wide, like the rest of Sourcing.
     cursor.execute("""
@@ -521,6 +547,9 @@ def init_db():
         "CREATE INDEX IF NOT EXISTS ix_vendor_contacts_owner ON vendor_contacts (owner_user_id, email_domain)",
         "CREATE INDEX IF NOT EXISTS ix_vendor_contacts_company ON vendor_contacts (owner_user_id, company_norm)",
         "CREATE INDEX IF NOT EXISTS ix_vendor_auto_drafts_cand ON vendor_auto_drafts (candidate_id, created_at)",
+        # one row per Gmail message per consultant - also how two server workers avoid handling a reply twice
+        "CREATE UNIQUE INDEX IF NOT EXISTS ux_application_replies_msg ON application_replies (candidate_id, message_id)",
+        "CREATE INDEX IF NOT EXISTS ix_application_replies_app ON application_replies (application_id)",
     ):
         try:
             cursor.execute(idx_sql)
@@ -648,6 +677,11 @@ def migrate_db(conn):
             cursor.execute("ALTER TABLE users ADD COLUMN region TEXT")
         except Exception:
             pass
+    if "auto_reply_mode" not in u_cols:   # off / draft / send_safe (reply_inbox.py)
+        try:
+            cursor.execute("ALTER TABLE users ADD COLUMN auto_reply_mode TEXT DEFAULT 'draft'")
+        except Exception:
+            pass
 
     # Candidate table columns
     c_cols = get_existing_cols("candidates")
@@ -710,6 +744,8 @@ def migrate_db(conn):
         "interview_at": "TEXT",
         "interview_round": "TEXT",
         "last_reply_at": "TEXT",
+        # Message-ID of the email we drafted, so a reply is matched to it and answered in the same thread
+        "outreach_message_id": "TEXT",
     }
     for col, c_type in app_new_cols.items():
         if col.lower() not in a_cols:
@@ -1629,7 +1665,8 @@ def create_application(candidate_id, job_id, user_id=1, stage="Saved", match_sco
     conn.close()
     return app_id
 
-def mark_job_drafted(job_id, candidate_id, draft_id, user_id=1, notes="", recruiter_email=None, resume_version_id=None):
+def mark_job_drafted(job_id, candidate_id, draft_id, user_id=1, notes="", recruiter_email=None, resume_version_id=None,
+                     outreach_message_id=None):
     """A Gmail draft was created: track it (application_tracker). The status only moves forward - a new
     draft for a job that is already at Interview stays at Interview. The draft note goes into the
     application's history, not over the recruiter's own notes."""
@@ -1638,7 +1675,8 @@ def mark_job_drafted(job_id, candidate_id, draft_id, user_id=1, notes="", recrui
     try:
         app_id = application_tracker.upsert(conn, job_id, candidate_id, user_id, stage="Drafted", draft_id=draft_id,
                                             drafted_at=datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
-                                            recruiter_email=recruiter_email, resume_version_id=resume_version_id)
+                                            recruiter_email=recruiter_email, resume_version_id=resume_version_id,
+                                            outreach_message_id=outreach_message_id)
         if notes:
             cur = conn.cursor()
             application_tracker.event(cur, app_id, user_id, "draft", notes)

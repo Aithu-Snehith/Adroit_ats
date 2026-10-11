@@ -7,6 +7,7 @@ import imaplib
 import time
 from pathlib import Path
 from email.message import EmailMessage
+from email.utils import make_msgid
 from typing import Dict, List, Optional, Any, Tuple
 
 import models
@@ -361,6 +362,10 @@ def create_candidate_draft(candidate_id: int, job_id: int, custom_to_email: Opti
         msg["Bcc"] = ", ".join(bcc)
     msg["From"] = sender_email
     msg["Subject"] = subject
+    # Our own Message-ID, stored on the application: a recruiter's reply quotes it (In-Reply-To), so the
+    # reply is matched to this application and our answer lands in the same Gmail thread.
+    message_id = make_msgid(domain=(sender_email or "jobhunt.local").rsplit("@", 1)[-1])
+    msg["Message-ID"] = message_id
     # Plain text for clients that want it + the formatted HTML version (what Outlook / Gmail show).
     msg.set_content(body_text)
     msg.add_alternative(render_email_html(body_text), subtype="html")
@@ -406,7 +411,7 @@ def create_candidate_draft(candidate_id: int, job_id: int, custom_to_email: Opti
                 job_id=job_id,
                 candidate_id=candidate_id,
                 draft_id=draft_id,
-                user_id=acting_user_id or 1, recruiter_email=to_email, resume_version_id=resume_version_id,
+                user_id=acting_user_id or 1, recruiter_email=to_email, resume_version_id=resume_version_id, outreach_message_id=message_id,
                 notes=f"Created Gmail Draft via App Password for {cand_name} -> {to_email}"
             )
             models.log_activity(
@@ -462,7 +467,7 @@ def create_candidate_draft(candidate_id: int, job_id: int, custom_to_email: Opti
                     job_id=job_id,
                     candidate_id=candidate_id,
                     draft_id=draft_id,
-                    user_id=acting_user_id or 1, recruiter_email=to_email, resume_version_id=resume_version_id,
+                    user_id=acting_user_id or 1, recruiter_email=to_email, resume_version_id=resume_version_id, outreach_message_id=message_id,
                     notes=f"Created 1-Click Gmail Draft for {cand_name} -> {to_email}"
                 )
                 models.log_activity(
