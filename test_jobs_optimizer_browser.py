@@ -174,7 +174,7 @@ try:
         page.fill("input[name=password]", PASSWORD)
         page.click("button[type=submit]")
         page.wait_for_url("**/dashboard**")
-        check("app.js?v=5.74.0" in page.content(), "cache-buster not bumped to 5.74.0")
+        check("app.js?v=5.75.0" in page.content(), "cache-buster not bumped to 5.75.0")
 
         # 1. Browse Jobs on Karun (not the first consultant)
         page.click("a.nav-item[data-tab=candidates]")
@@ -228,10 +228,25 @@ try:
               f"draft to the row's recruiter with the tailored resume: {att}")
         check(len(resume_versions.list_for(karun_id)) == 1, "Download + Create Draft reused ONE saved version")
 
+        # reopening the same job: the saved resume comes back - the optimizer is not run again (only the email preview is written)
+        ai_calls.clear()
+        page.click(f"{ROW.format(pasted_id)} .btn-optimize-job")
+        page.wait_for_function("document.getElementById('do-status').innerText.includes('saved for this job')", timeout=10000)
+        check("Power BI dashboards" in page.input_value("#do-optimized") and "rewrite" not in ai_calls and not page.is_disabled("#btn-do-save"),
+              f"saved version shown, no AI call: {ai_calls}")
+        page.click("#btn-close-draft-optimize")
+
         # 3b. Dice posting -> full description read once, then optimized
         page.click(f"{ROW.format(scraped_id)} .btn-optimize-job")
         page.wait_for_function("document.getElementById('do-jd').value.startsWith('FULL DICE DESCRIPTION')", timeout=10000)
         page.wait_for_function("!document.getElementById('btn-do-save').disabled", timeout=20000)
+        # closed with x (not saved) and reopened -> the same result and my edit come back, nothing re-run
+        page.fill("#do-optimized", page.input_value("#do-optimized") + "\nMY EDIT KEPT")
+        page.click("#btn-close-draft-optimize")
+        ai_calls.clear()
+        page.click(f"{ROW.format(scraped_id)} .btn-optimize-job")
+        page.wait_for_function("document.getElementById('do-status').innerText.includes('earlier result')", timeout=10000)
+        check(page.input_value("#do-optimized").endswith("MY EDIT KEPT") and "rewrite" not in ai_calls, f"unsaved result restored with my edit, no AI call: {ai_calls}")
         page.click("#btn-do-discard")
         page.click(f"{ROW.format(scraped_id)} .btn-optimize-job")
         page.wait_for_function("document.getElementById('do-jd').value.startsWith('FULL DICE DESCRIPTION')", timeout=10000)

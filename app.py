@@ -19,6 +19,7 @@ import cloud_align
 import resume_versions
 import application_tracker
 import outreach_ai
+import docx_editor
 import application_brief
 import regions
 import reply_inbox
@@ -1890,6 +1891,26 @@ def api_optimized_resumes():
     models.log_activity(user["id"], user["name"], "Saved Tailored Resume", "Candidate", cid,
                         f"{filename}" + (f" for job #{job_id}" if job_id else ""))
     return jsonify({"success": True, "id": version_id, "filename": filename, "format_preserved": kept, "note": note})
+
+
+@app.route("/api/optimized-resumes/for-job", methods=["GET"])
+def api_optimized_resume_for_job():
+    """The latest saved tailored resume for this consultant + job (with its text), so reopening Optimize
+    for the same job shows it instead of running the AI again."""
+    user = current_user()
+    if not user:
+        return jsonify({"error": "Login required"}), 401
+    cid, jid = _int_or_none(request.args.get("candidate_id")), _int_or_none(request.args.get("job_id"))
+    if not cid or not jid or not can_access_candidate(user, cid):
+        return jsonify({"error": "Consultant not found"}), 404
+    v = resume_versions.latest_for_job(cid, jid)
+    if not v or not v.get("data"):
+        return jsonify({"version": None})
+    try:
+        text = docx_editor.extract_text(bytes(v["data"]))
+    except Exception:
+        text = ""
+    return jsonify({"version": {"id": v["id"], "filename": v["filename"], "created_at": str(v.get("created_at") or "")[:16], "text": text}})
 
 
 @app.route("/api/optimized-resumes/<int:version_id>/download", methods=["GET"])

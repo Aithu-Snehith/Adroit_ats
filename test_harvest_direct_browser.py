@@ -91,7 +91,7 @@ try:
         page.fill("input[name=password]", PASSWORD)
         page.click("button[type=submit]")
         page.wait_for_url("**/dashboard**")
-        check("app.js?v=5.74.0" in page.content(), "cache-buster not bumped to 5.74.0")
+        check("app.js?v=5.75.0" in page.content(), "cache-buster not bumped to 5.75.0")
         page.click("a.nav-item[data-tab=sourcing]")
         page.select_option("#filter-student-bachelor-year", "2019")
         check(page.is_enabled("#btn-apply-student-filter"), "Search LinkedIn enabled with only a HarvestAPI key")

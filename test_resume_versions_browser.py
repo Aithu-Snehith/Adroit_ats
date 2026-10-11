@@ -112,7 +112,7 @@ try:
         page.fill("input[name=password]", PASSWORD)
         page.click("button[type=submit]")
         page.wait_for_url("**/dashboard**")
-        check("app.js?v=5.74.0" in page.content(), "cache-buster not bumped to 5.74.0")
+        check("app.js?v=5.75.0" in page.content(), "cache-buster not bumped to 5.75.0")
         page.wait_for_function("state.consultants && state.consultants.length >= 1", timeout=15000)
 
         # ---- Paste & Draft: optimize -> discard -> re-optimize -> edit -> save -> draft attaches it
