@@ -174,7 +174,7 @@ try:
         page.fill("input[name=password]", PASSWORD)
         page.click("button[type=submit]")
         page.wait_for_url("**/dashboard**")
-        check("app.js?v=5.75.0" in page.content(), "cache-buster not bumped to 5.75.0")
+        check("app.js?v=5.76.0" in page.content(), "cache-buster not bumped to 5.76.0")
 
         # 1. Browse Jobs on Karun (not the first consultant)
         page.click("a.nav-item[data-tab=candidates]")
@@ -213,8 +213,8 @@ try:
         check(dl.value.suggested_filename == "Karun_Testcase_Power_BI.docx", f"download name: {dl.value.suggested_filename}")
         # the email is shown IN the Optimize window before anything is drafted
         page.wait_for_function("document.getElementById('do-email-body').value.length > 40", timeout=15000)
-        check(page.is_visible("#do-email") and page.input_value("#do-email-to") == "rec@example.invalid", f"email preview in the same window, To = row's recruiter: {page.input_value('#do-email-to')}")
-        page.locator("#do-email").scroll_into_view_if_needed()
+        check(page.is_visible("#do-email-box") and page.input_value("#do-email-to") == "rec@example.invalid", f"email preview in the same window, To = row's recruiter: {page.input_value('#do-email-to')}")
+        page.locator("#do-email-box").scroll_into_view_if_needed()
         page.screenshot(path=os.path.join(tmp_dir, "email_preview.png"))
         print("EMAIL_PREVIEW_SHOT", os.path.join(tmp_dir, "email_preview.png"))
         n_before = len(captured)

@@ -982,6 +982,101 @@ def api_parse_jd():
     extracted = extract_details_from_raw_jd(text)
     return jsonify(extracted)
 
+_READ_SYSTEM = """You read a job requirement that a recruiter pasted (an email, a LinkedIn post or a JD).
+Return ONLY JSON: {"title": "", "company": "client or company hiring", "location": "", "recruiter_email": "only an address
+that appears in the text", "rate": "only if stated", "employment_type": "C2C / W2 / 1099 / Full-time / Contract / unknown",
+"skills": ["key skills, max 10"]}. Leave a field empty when the text doesn't say it - never guess."""
+
+
+def _duplicates(cid, title, company, recruiter_email):
+    """This consultant's applications in the last 30 days for the same requirement (same title + company,
+    or the same recruiter address)."""
+    since = (datetime.utcnow() - timedelta(days=30)).strftime("%Y-%m-%d")
+    conn = models.get_db_connection()
+    try:
+        cur = conn.cursor()
+        cur.execute("""SELECT a.id, a.stage, a.drafted_at, a.applied_date, a.updated_at, j.title, j.company,
+                              LOWER(COALESCE(a.recruiter_email, j.recruiter_email, '')) AS rec
+                       FROM applications a JOIN jobs j ON j.id = a.job_id WHERE a.candidate_id = ?""", (cid,))
+        rows = [dict(r) for r in cur.fetchall()]
+    finally:
+        conn.close()
+    t, c, e = (title or "").strip().lower(), (company or "").strip().lower(), (recruiter_email or "").strip().lower()
+    out = []
+    for r in rows:
+        when = str(r.get("drafted_at") or r.get("applied_date") or r.get("updated_at") or "")[:10]
+        if when and when < since:
+            continue
+        same_job = t and (r["title"] or "").strip().lower() == t and (not c or (r["company"] or "").strip().lower() == c)
+        same_rec = e and r["rec"] == e
+        if same_job or same_rec:
+            out.append({"application_id": r["id"], "title": r["title"], "company": r["company"], "when": when,
+                        "status": application_tracker.STATUS_LABELS.get(r["stage"], r["stage"] or ""),
+                        "why": "same requirement" if same_job else "same recruiter"})
+    return out[:5]
+
+
+@app.route("/api/outreach/read-requirement", methods=["POST"])
+def api_read_requirement():
+    """Paste window: the AI reads the pasted text (fields + what the posting asks applicants to do) and
+    says whether this consultant already applied for it recently."""
+    user = current_user()
+    if not user:
+        return jsonify({"error": "Login required"}), 401
+    data = request.get_json(silent=True) or {}
+    raw = str(data.get("raw_text") or "").strip()[:20000]
+    if data.get("duplicates_only"):      # consultant changed: only the "already applied" check, no new AI read
+        cid = _int_or_none(data.get("candidate_id"))
+        dups = _duplicates(cid, data.get("title"), data.get("company"), data.get("recruiter_email")) if cid and can_access_candidate(user, cid) else []
+        return jsonify({"duplicates": dups})
+    if len(raw) < 40:
+        return jsonify({"error": "Paste the requirement first."}), 400
+    fields = {}
+    if resume_bot.ai_configured():
+        try:
+            fields, _ = reply_inbox._ai(_READ_SYSTEM, f"REQUIREMENT:\n{raw[:12000]}")
+        except Exception as ex:
+            logger.warning(f"Reading the requirement failed: {ex}")
+            fields = {}
+    regex = extract_details_from_raw_jd(raw)
+    low = raw.lower()
+    rec = str(fields.get("recruiter_email") or "").strip().lower()
+    out = {
+        "title": str(fields.get("title") or "").strip() or regex.get("title") or "",
+        "company": str(fields.get("company") or "").strip() or regex.get("company") or "",
+        "location": str(fields.get("location") or "").strip(),
+        "recruiter_email": rec if rec and rec in low else (regex.get("recruiter_email") or ""),
+        "rate": str(fields.get("rate") or "").strip() or regex.get("salary") or "",
+        "employment_type": str(fields.get("employment_type") or "").strip(),
+        "skills": [str(x).strip() for x in (fields.get("skills") or []) if str(x).strip()][:10],
+        "ai": bool(fields),
+    }
+    out["brief"] = {k: v for k, v in application_brief.brief(raw).items() if k != "model"}
+    cid = _int_or_none(data.get("candidate_id"))
+    out["duplicates"] = _duplicates(cid, out["title"], out["company"], out["recruiter_email"]) if cid and can_access_candidate(user, cid) else []
+    return jsonify(out)
+
+
+@app.route("/api/outreach/match-check", methods=["POST"])
+def api_match_check():
+    """Match % for this consultant and the pasted JD (the optimizer's step 1, cached for Optimize)."""
+    user = current_user()
+    if not user:
+        return jsonify({"error": "Login required"}), 401
+    data = request.get_json(silent=True) or {}
+    cid = _int_or_none(data.get("candidate_id"))
+    if not cid or not can_access_candidate(user, cid):
+        return jsonify({"error": "Consultant not found"}), 404
+    cand = models.get_candidate_by_id(cid)
+    found = models.find_resume_file(cand)
+    docx = found[1] if found and found[0].lower().endswith(".docx") else None
+    text = (cand.get("resume_text") or "") if docx is None else ""
+    if docx is None and not text.strip() and found:
+        text = resume_bot.extract_text_from_file_bytes(found[1], found[0], strict=True)
+    res = resume_bot.match_check(text, str(data.get("jd_text") or "")[:20000], docx_bytes=docx)
+    return (jsonify(res), 200) if not res.get("error") else (jsonify(res), 400)
+
+
 @app.route("/api/outreach/paste-and-draft", methods=["POST", "OPTIONS"])
 def api_paste_and_draft():
     if request.method == "OPTIONS":
@@ -1058,6 +1153,8 @@ def api_paste_and_draft():
         job_id=job_id,
         custom_to_email=recruiter_email,
         custom_notes=custom_notes,
+        custom_subject=(data.get("custom_subject") or "").strip() or None,
+        custom_body=(data.get("custom_body") or "").strip() or None,
         bcc=[c["email"] for c in bcc_contacts],
         attachment=attachment[:2] if attachment else None,
         acting_user_id=user["id"],
@@ -1238,13 +1335,13 @@ def api_ai_personalize_draft():
     current_subject = data.get("current_subject", "")
     current_body = data.get("current_body", "")
 
-    if not candidate_id or not job_id:
+    if not candidate_id or not (job_id or data.get("job_title") or data.get("jd_text")):
         return jsonify({"error": "candidate_id and job_id are required"}), 400
     if not can_access_candidate(user, candidate_id):
         return jsonify({"error": "Consultant not found"}), 404
 
     cand = models.get_candidate_by_id(int(candidate_id))
-    job = models.get_job_by_id(int(job_id))
+    job = _job_from_request(data)
     if not cand or not job:
         return jsonify({"error": "Candidate or Job not found"}), 404
 
@@ -1278,6 +1375,20 @@ def api_ai_personalize_draft():
     return jsonify(out)
 
 
+def _job_from_request(data):
+    """The job for a preview / AI edit: the saved job (job_id), or - in the Paste Requirement window,
+    before anything is saved - the pasted requirement as typed."""
+    jid = _int_or_none(data.get("job_id"))
+    if jid:
+        return models.get_job_by_id(jid)
+    title = str(data.get("job_title") or "").strip()
+    if not title and not str(data.get("jd_text") or "").strip():
+        return None
+    return {"id": None, "title": title or "this role", "company": str(data.get("company") or "").strip(),
+            "recruiter_email": str(data.get("to_email") or "").strip(), "recruiter_name": "", "location": str(data.get("location") or ""),
+            "description": str(data.get("jd_text") or "")[:20000], "source": "Manual Paste"}
+
+
 @app.route("/api/outreach/application-preview", methods=["POST"])
 def api_application_preview():
     """The email that "Save & Create Draft" will send, shown INSIDE the Optimize window before anything
@@ -1286,13 +1397,14 @@ def api_application_preview():
     if not user:
         return jsonify({"error": "Login required"}), 401
     data = request.get_json(silent=True) or {}
-    cid, jid = _int_or_none(data.get("candidate_id")), _int_or_none(data.get("job_id"))
-    if not cid or not jid or not can_access_candidate(user, cid):
+    cid = _int_or_none(data.get("candidate_id"))
+    if not cid or not can_access_candidate(user, cid):
         return jsonify({"error": "Consultant not found"}), 404
-    cand, job = models.get_candidate_by_id(cid), models.get_job_by_id(jid)
+    cand, job = models.get_candidate_by_id(cid), _job_from_request(data)
     if not cand or not job:
         return jsonify({"error": "Job not found"}), 404
     b = application_brief.build(cand, job, str(data.get("jd_text") or "")[:20000],
+                                version_id=_int_or_none(data.get("optimized_resume_id")),
                                 default_to=(data.get("to_email") or job.get("recruiter_email") or "").strip(),
                                 resume_text=str(data.get("resume_text") or "")[:20000])
     return jsonify({"to": b["to"], "subject": b["subject"], "body": b["body"], "checklist": b["checklist"],

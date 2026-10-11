@@ -1139,7 +1139,7 @@
 
         <!-- MODAL: INSTANT REQUIREMENT PASTE & DRAFT -->
     <div class="modal-backdrop" id="modal-paste-draft" style="display: none;">
-        <div class="modal-dialog">
+        <div class="modal-dialog" style="max-width: 900px; width: 96vw;">
             <div class="modal-header">
                 <h3>📋 Paste Requirement ➔ 1-Click Gmail Draft</h3>
                 <button class="modal-close" id="btn-close-paste-draft-modal">&times;</button>
@@ -1188,10 +1188,10 @@
                     <div id="pd-cloud-note" style="display:none; border-radius:8px; padding:8px 12px; margin-bottom:10px; font-size:0.85rem;"></div>
                     <div id="pd-vendor-box" style="display:none; background:#ecfdf5; border:1px solid #a7f3d0; border-radius:8px; padding:10px 12px; margin-bottom:12px; font-size:0.875rem;"></div>
 
-                    <div class="form-group">
-                        <label>Custom Notes for Pitch (Optional)</label>
-                        <input type="text" id="pd-notes" class="form-control" placeholder="e.g. Emphasize AWS Microservices & Immediate Availability">
-                    </div>
+                    <!-- AI reading of the pasted requirement, match %, "already applied" warning -->
+                    <div id="pd-ai-info" style="display:none; font-size:0.82rem; line-height:1.6; padding:8px 10px; border-radius:8px; background:#f8fafc; border:1px solid #e2e8f0; margin-bottom:10px;"></div>
+                    <!-- The email that will be sent (shared email component: emailBox('pd')) -->
+                    <div id="pd-email-box" style="display:none; margin-bottom:10px;"></div>
                 </div>
                 <div class="modal-footer">
                     <button type="button" class="btn btn-secondary" id="btn-cancel-paste-draft">Cancel</button>
@@ -1229,28 +1229,8 @@
                     </div>
                 </div>
                 <div id="do-filename" style="font-size:0.82rem; color:#475569; margin-top:8px;"></div>
-                <!-- The email "Save & Create Draft" will send - shown here BEFORE anything is drafted -->
-                <div id="do-email" style="display:none; margin-top:14px; border:1px solid #e2e8f0; border-radius:10px; padding:12px 14px; background:#ffffff;">
-                    <div style="display:flex; justify-content:space-between; align-items:center; gap:8px; flex-wrap:wrap; margin-bottom:8px;">
-                        <span style="font-size:0.85rem; font-weight:800; color:#0f172a;">✉️ Email that will be sent</span>
-                        <div style="display:flex; gap:6px; align-items:center;">
-                            <span id="do-email-note" style="font-size:0.75rem; color:#059669; font-weight:600;"></span>
-                            <button type="button" class="btn btn-secondary btn-sm" id="btn-do-email-undo" disabled>↶ Undo</button>
-                            <button type="button" class="btn btn-secondary btn-sm" id="btn-do-email-rewrite" title="Write the email again from the optimized resume as it is now">↻ Rewrite email from the resume</button>
-                        </div>
-                    </div>
-                    <div id="do-email-status" style="font-size:0.82rem; color:#1e3a8a; margin-bottom:6px;"></div>
-                    <div id="do-email-checklist" style="display:none; font-size:0.8rem; line-height:1.6; padding:8px 10px; border-radius:8px; background:#f8fafc; border:1px solid #e2e8f0; margin-bottom:8px;"></div>
-                    <div style="display:grid; grid-template-columns: 1fr 1.4fr; gap:8px; margin-bottom:8px;">
-                        <div><label style="font-size:0.75rem; font-weight:700; color:#475569;">To</label><input id="do-email-to" class="form-control" style="font-size:0.85rem;" placeholder="recruiter@company.com"></div>
-                        <div><label style="font-size:0.75rem; font-weight:700; color:#475569;">Subject</label><input id="do-email-subject" class="form-control" style="font-size:0.85rem; font-weight:600;"></div>
-                    </div>
-                    <textarea id="do-email-body" rows="12" class="form-control" style="font-size:0.84rem; line-height:1.55;"></textarea>
-                    <div style="display:flex; gap:8px; margin-top:8px;">
-                        <input id="do-email-instr" class="form-control" placeholder="Tell the AI what to change, e.g. 'shorter' or 'notice period is 30 days'" style="flex:1; font-size:0.85rem;">
-                        <button type="button" class="btn btn-primary btn-sm" id="btn-do-email-ai">Ask AI</button>
-                    </div>
-                </div>
+                <!-- The email "Save & Create Draft" will send (shared email component: emailBox('do')) -->
+                <div id="do-email-box" style="display:none; margin-top:14px;"></div>
             </div>
             <div class="modal-footer">
                 <button type="button" class="btn btn-secondary" id="btn-do-discard">Discard</button>
@@ -1453,7 +1433,7 @@
     <aside id="trk-drawer" aria-label="Candidate tracking card" style="position:fixed; top:0; right:0; height:100vh; width:min(480px, 100vw); background:#ffffff; box-shadow:-12px 0 30px rgba(15,23,42,0.18); z-index:1201; transform:translateX(105%); transition:transform 0.2s ease; overflow-y:auto; box-sizing:border-box;"></aside>
     <script>window.CURRENT_USER = {{ {'id': user.id, 'admin': ('Admin' in (user.role or ''))} | tojson }};
         window.VIEW_REGION = {{ view_region | tojson }};</script>
-    <script src="/static/js/app.js?v=5.75.0"></script>
+    <script src="/static/js/app.js?v=5.76.0"></script>
 
     <!-- Recruiter Management Inline Fallback: app.js defines all of these with toast-based
          feedback and no page reloads. These only fire if app.js somehow failed to load -

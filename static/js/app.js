@@ -572,6 +572,7 @@ function openPasteDraftModal(candId = null) {
     const cloudNote = document.getElementById('pd-cloud-note');
     if (cloudNote) { cloudNote.style.display = 'none'; cloudNote.innerHTML = ''; }
     pdResumeReset();
+    pdResetAi();
 
     const select = document.getElementById('pd-consultant-select');
     if (select && candId) {
@@ -1765,8 +1766,10 @@ function initModals() {
             const jobTitle = document.getElementById('pd-title')?.value?.trim();
             const company = document.getElementById('pd-company')?.value?.trim();
             const rate = document.getElementById('pd-rate')?.value?.trim();
-            const notes = document.getElementById('pd-notes')?.value?.trim();
+            const notes = '';
             const submitBtn = document.getElementById('btn-submit-paste-draft');
+            const shown = pdBox.visible() ? pdBox.values() : null;
+            if (shown && /\[please (fill|add):/i.test(shown.body) && !confirm('The email still has [please fill / add] parts. Create the draft anyway and fill them in Gmail?')) return;
 
             if (!candId) {
                 showToast('Please select a consultant first', 'warning');
@@ -1785,7 +1788,9 @@ function initModals() {
                     body: JSON.stringify({
                         candidate_id: parseInt(candId),
                         raw_jd_text: rawText,
-                        recruiter_email: recruiterEmail,
+                        recruiter_email: (shown && shown.to) || recruiterEmail,
+                        custom_subject: shown ? shown.subject : '',
+                        custom_body: shown ? shown.body : '',
                         job_title: jobTitle,
                         company: company,
                         salary: rate,
@@ -4895,10 +4900,12 @@ const optPanel = { mode: 'paste', candId: null, jobId: null, emailInput: null, s
 // Unsaved optimize results per consultant + job, kept while the page is open: closing the window (x) and
 // reopening the same job brings the result back instead of running the AI again. Discard forgets it.
 const optCache = {};
-const optKey = () => `${optPanel.candId}:${optPanel.jobId}`;
+const _hash = (t) => { let h = 0; for (let i = 0; i < t.length; i++) h = (h * 31 + t.charCodeAt(i)) | 0; return h; };
+const optKey = () => optPanel.mode === 'job' ? `${optPanel.candId}:${optPanel.jobId}`
+    : `${optPanel.candId}:p:${_hash((document.getElementById('do-jd')?.value || '').trim())}`;
 
 function pdResumeReset() {
-    pdResume.versionId = null; pdResume.filename = ''; pdResume.result = null; pdResume.candId = null;
+    pdResume.versionId = null; pdResume.filename = ''; pdResume.result = null; pdResume.candId = null; pdResume.versionText = '';
     const el = document.getElementById('pd-resume-version');
     if (el) el.innerHTML = "Attaching: the consultant's original resume.";
 }
@@ -4920,24 +4927,16 @@ function initDraftOptimize() {
     $('do-optimized').addEventListener('input', () => { const c = optCache[optKey()]; if (c) c.edited = $('do-optimized').value; });
     $('btn-do-save').addEventListener('click', () => (optPanel.mode === 'job' ? jobOptimizeSaveAndDraft() : draftOptimizeSave()));
     $('btn-do-download').addEventListener('click', optimizeDownload);
-    $('btn-do-email-rewrite').addEventListener('click', doEmailGenerate);
-    $('btn-do-email-ai').addEventListener('click', doEmailAsk);
-    $('do-email-instr').addEventListener('keydown', (e) => { if (e.key === 'Enter') doEmailAsk(); });
-    $('btn-do-email-undo').addEventListener('click', () => {
-        const prev = optPanel.emailUndo.pop();
-        if (prev) { $('do-email-subject').value = prev.subject; $('do-email-body').value = prev.body; }
-        $('btn-do-email-undo').disabled = !optPanel.emailUndo.length;
-        $('do-email-note').textContent = prev ? '↶ Undone' : '';
-    });
-    $('pd-consultant-select')?.addEventListener('change', () => { if (pdResume.versionId) pdResumeReset(); });
+    $('pd-consultant-select')?.addEventListener('change', () => { if (pdResume.versionId) pdResumeReset(); pdConsultantChanged(); });
+    $('pd-raw-text')?.addEventListener('input', () => { clearTimeout(pdState.readTimer); pdState.readTimer = setTimeout(pdRead, 1200); });
 }
 
 // opts: {mode, candId, jdText?, jobId?, emailInput?}. Returns true when an earlier result for this job
 // was brought back (nothing to run).
 async function openOptimizePanel(opts) {
     const $ = id => document.getElementById(id);
-    Object.assign(optPanel, { mode: opts.mode, candId: opts.candId, jobId: opts.jobId || null, emailInput: opts.emailInput || null, saved: null, savedText: '', emailUndo: [] });
-    $('do-email').style.display = 'none';
+    Object.assign(optPanel, { mode: opts.mode, candId: opts.candId, jobId: opts.jobId || null, emailInput: opts.emailInput || null, saved: null, savedText: '' });
+    doBox.reset();
     pdResume.result = null;
     $('do-jd').value = opts.jdText || '';
     $('do-jd-wrap').style.display = opts.mode === 'job' ? '' : 'none';
@@ -4945,7 +4944,7 @@ async function openOptimizePanel(opts) {
     $('btn-do-save').innerHTML = opts.mode === 'job' ? '✉️ Save &amp; Create Draft' : '💾 Save &amp; use in this draft';
     $('btn-do-download').style.display = 'none';
     $('modal-draft-optimize').style.display = 'flex';
-    if (opts.mode === 'job' && await optRestore(opts)) return true;
+    if (await optRestore(opts)) return true;
     if (opts.mode === 'job' && !opts.jdText) return false;     // the job's JD is still loading (jobOptimizeOpen)
     draftOptimizeRun(true);
     return false;
@@ -4969,6 +4968,7 @@ async function optRestore(opts) {
         renderCloudCheck($('do-cloud'), cached.result.cloud_check);
         $('do-status').innerHTML = `<b>Your earlier result for this job</b> (not saved yet) - match ${cached.result.initial_match_percentage ?? '?'}% &rarr; ${cached.result.target_match_percentage ?? '?'}%. Nothing was run again. Click <b>Re-optimize</b> to run the AI again.`;
     } else {
+        if (opts.mode !== 'job') return false;      // pasted requirement: only an unsaved earlier result can come back
         let v = null;
         try { v = (await (await fetch(`/api/optimized-resumes/for-job?candidate_id=${optPanel.candId}&job_id=${optPanel.jobId}`)).json()).version; } catch (e) { v = null; }
         if (!v || !v.text) return false;
@@ -4986,7 +4986,7 @@ async function optRestore(opts) {
     $('btn-do-download').style.display = '';
     $('btn-do-reoptimize').disabled = false;
     if (($('do-jd').value || '').trim().length < 30) $('do-jd').value = opts.jdText || opts.summary || '';
-    doEmailGenerate();
+    if (opts.mode === 'job') doEmailGenerate();
     return true;
 }
 
@@ -5022,7 +5022,7 @@ async function draftOptimizeRun(firstTime) {
         if (!res.ok || data.error) throw new Error(data.error || 'Optimization failed.');
         pdResume.result = data;
         $('do-optimized').value = data.updated_resume_text || '';
-        if (optPanel.mode === 'job' && data.optimized) optCache[optKey()] = { result: data, edited: data.updated_resume_text || '', jd };
+        if (data.optimized) optCache[optKey()] = { result: data, edited: data.updated_resume_text || '', jd };
         renderCloudCheck($('do-cloud'), data.cloud_check);
         $('do-status').innerHTML = (data.optimized
             ? `<b>Optimized</b> - match ${data.initial_match_percentage ?? '?'}% &rarr; ${data.target_match_percentage ?? '?'}%. Review and edit on the right, then ${optPanel.mode === 'job' ? 'Download or Create Draft' : 'Save'}.`
@@ -5072,12 +5072,14 @@ async function draftOptimizeSave() {
         const d = await optimizeEnsureSaved();
         pdResume.versionId = d.id;
         pdResume.filename = d.filename;
+        pdResume.versionText = $('do-optimized').value;
         $('pd-resume-version').innerHTML = `Attaching: <b style="color:#059669;">${escapeHtml(d.filename)}</b> (tailored, saved) ` +
             `&middot; <a href="/api/optimized-resumes/${d.id}/download">view</a> &middot; <a href="#" id="pd-use-original">use original instead</a>` +
             (d.note ? `<div style="color:#b45309;">${escapeHtml(d.note)}</div>` : '');
         $('pd-use-original').addEventListener('click', (e) => { e.preventDefault(); pdResumeReset(); });
         $('modal-draft-optimize').style.display = 'none';
-        showToast(`Saved ${d.filename} - it will be attached to this draft.`, 'success', 6000);
+        showToast(`Saved ${d.filename} - it will be attached to this draft. Rewriting the email from it...`, 'success', 6000);
+        if (pdState.read || pdBox.visible()) pdBox.generate();
     } catch (err) {
         showToast(err.message, 'error', 6000);
         $('btn-do-save').disabled = false;
@@ -5119,58 +5121,183 @@ async function jobOptimizeOpen(jobId, candId, row) {
     $('btn-do-reoptimize').disabled = false;
 }
 
-// ---- The email "Save & Create Draft" will send, shown in the Optimize window first
-async function doEmailGenerate() {
-    const $ = id => document.getElementById(id);
-    $('do-email').style.display = '';
-    $('do-email-status').innerHTML = '<b>Writing the email</b> from the job description and the optimized resume above...';
-    $('btn-do-email-rewrite').disabled = true;
-    try {
-        const res = await fetch('/api/outreach/application-preview', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ candidate_id: optPanel.candId, job_id: optPanel.jobId, jd_text: $('do-jd').value, resume_text: $('do-optimized').value,
-                to_email: (optPanel.emailInput ? optPanel.emailInput.value : '').trim() }) });
-        const d = await res.json().catch(() => ({}));
-        if (!res.ok) { $('do-email-status').innerHTML = `<span style="color:#b91c1c;">${escapeHtml(d.error || 'Could not write the email.')}</span>`; return; }
-        if ($('do-email-body').value) { optPanel.emailUndo.push({ subject: $('do-email-subject').value, body: $('do-email-body').value }); $('btn-do-email-undo').disabled = false; }
-        $('do-email-to').value = d.to || '';
-        $('do-email-subject').value = d.subject || '';
-        $('do-email-body').value = d.body || '';
-        const items = d.checklist || [];
-        $('do-email-checklist').innerHTML = items.length ? '<b style="color:#334155;">What this job asks</b><br>' + items.map(i =>
-            `<span style="color:${i.ok ? '#059669' : '#b45309'};">${i.ok ? '✓' : '⚠'} ${escapeHtml(i.text)}</span>`).join('<br>') : '';
-        $('do-email-checklist').style.display = items.length ? '' : 'none';
-        $('do-email-status').innerHTML = 'Check and edit the email, then click <b>Save &amp; Create Draft</b> - the draft gets exactly this email and the optimized resume.'
-            + (d.fallback ? ' <span style="color:#b45309;">(Standard email used - the AI could not write one that only uses facts from the resume.)</span>' : '');
-        $('do-email-note').textContent = '';
-    } catch (err) {
-        $('do-email-status').innerHTML = `<span style="color:#b91c1c;">${escapeHtml(err.message)}</span>`;
-    } finally { $('btn-do-email-rewrite').disabled = false; }
+// ---- Shared email component: "Email that will be sent" (checklist, To, Subject, Body, Ask AI, Undo,
+// Rewrite). Used by the Optimize window ('do') and the Paste Requirement window ('pd'), so both behave the
+// same. ctx() returns what the server needs: candidate_id, job_id or the pasted job fields, jd_text,
+// resume_text (optimized text on screen) / optimized_resume_id, to_email.
+function emailBox(prefix, ctx) {
+    const $ = (id) => document.getElementById(id);
+    const box = { undo: [], rendered: false };
+    const render = () => {
+        if (box.rendered) return;
+        box.rendered = true;
+        $(`${prefix}-email-box`).innerHTML = `
+            <div style="border:1px solid #e2e8f0; border-radius:10px; padding:12px 14px; background:#ffffff;">
+                <div style="display:flex; justify-content:space-between; align-items:center; gap:8px; flex-wrap:wrap; margin-bottom:8px;">
+                    <span style="font-size:0.85rem; font-weight:800; color:#0f172a;">✉️ Email that will be sent</span>
+                    <div style="display:flex; gap:6px; align-items:center;">
+                        <span id="${prefix}-email-note" style="font-size:0.75rem; color:#059669; font-weight:600;"></span>
+                        <button type="button" class="btn btn-secondary btn-sm" id="btn-${prefix}-email-undo" disabled>↶ Undo</button>
+                        <button type="button" class="btn btn-secondary btn-sm" id="btn-${prefix}-email-rewrite" title="Write the email again from the resume as it is now">↻ Rewrite email from the resume</button>
+                    </div>
+                </div>
+                <div id="${prefix}-email-status" style="font-size:0.82rem; color:#1e3a8a; margin-bottom:6px;"></div>
+                <div id="${prefix}-email-checklist" style="display:none; font-size:0.8rem; line-height:1.6; padding:8px 10px; border-radius:8px; background:#f8fafc; border:1px solid #e2e8f0; margin-bottom:8px;"></div>
+                <div style="display:grid; grid-template-columns: 1fr 1.4fr; gap:8px; margin-bottom:8px;">
+                    <div><label style="font-size:0.75rem; font-weight:700; color:#475569;">To</label><input id="${prefix}-email-to" class="form-control" style="font-size:0.85rem;" placeholder="recruiter@company.com"></div>
+                    <div><label style="font-size:0.75rem; font-weight:700; color:#475569;">Subject</label><input id="${prefix}-email-subject" class="form-control" style="font-size:0.85rem; font-weight:600;"></div>
+                </div>
+                <textarea id="${prefix}-email-body" rows="12" class="form-control" style="font-size:0.84rem; line-height:1.55;"></textarea>
+                <div style="display:flex; gap:8px; margin-top:8px;">
+                    <input id="${prefix}-email-instr" class="form-control" placeholder="Tell the AI what to change, e.g. 'shorter' or 'notice period is 30 days'" style="flex:1; font-size:0.85rem;">
+                    <button type="button" class="btn btn-primary btn-sm" id="btn-${prefix}-email-ai">Ask AI</button>
+                </div>
+            </div>`;
+        $(`btn-${prefix}-email-rewrite`).addEventListener('click', () => box.generate());
+        $(`btn-${prefix}-email-ai`).addEventListener('click', () => box.ask());
+        $(`${prefix}-email-instr`).addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); box.ask(); } });
+        $(`btn-${prefix}-email-undo`).addEventListener('click', () => {
+            const prev = box.undo.pop();
+            if (prev) { $(`${prefix}-email-subject`).value = prev.subject; $(`${prefix}-email-body`).value = prev.body; }
+            $(`btn-${prefix}-email-undo`).disabled = !box.undo.length;
+            $(`${prefix}-email-note`).textContent = prev ? '↶ Undone' : '';
+        });
+    };
+    box.reset = () => { box.undo = []; const el = $(`${prefix}-email-box`); if (el) el.style.display = 'none'; if (box.rendered) { $(`${prefix}-email-body`).value = ''; } };
+    box.visible = () => { const el = $(`${prefix}-email-box`); return !!el && el.style.display !== 'none' && !!(box.rendered && $(`${prefix}-email-body`).value.trim()); };
+    box.values = () => ({ to: $(`${prefix}-email-to`).value.trim(), subject: $(`${prefix}-email-subject`).value.trim(), body: $(`${prefix}-email-body`).value.trim() });
+    box.generate = async () => {
+        render();
+        $(`${prefix}-email-box`).style.display = '';
+        $(`${prefix}-email-status`).innerHTML = '<b>Writing the email</b> from the job description and the resume that will be attached...';
+        $(`btn-${prefix}-email-rewrite`).disabled = true;
+        try {
+            const res = await fetch('/api/outreach/application-preview', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(ctx()) });
+            const d = await res.json().catch(() => ({}));
+            if (!res.ok) { $(`${prefix}-email-status`).innerHTML = `<span style="color:#b91c1c;">${escapeHtml(d.error || 'Could not write the email.')}</span>`; return; }
+            if ($(`${prefix}-email-body`).value) { box.undo.push({ subject: $(`${prefix}-email-subject`).value, body: $(`${prefix}-email-body`).value }); $(`btn-${prefix}-email-undo`).disabled = false; }
+            $(`${prefix}-email-to`).value = d.to || '';
+            $(`${prefix}-email-subject`).value = d.subject || '';
+            $(`${prefix}-email-body`).value = d.body || '';
+            const items = d.checklist || [];
+            $(`${prefix}-email-checklist`).innerHTML = items.length ? '<b style="color:#334155;">What this job asks</b><br>' + items.map(i =>
+                `<span style="color:${i.ok ? '#059669' : '#b45309'};">${i.ok ? '✓' : '⚠'} ${escapeHtml(i.text)}</span>`).join('<br>') : '';
+            $(`${prefix}-email-checklist`).style.display = items.length ? '' : 'none';
+            $(`${prefix}-email-status`).innerHTML = 'Check and edit the email - the draft gets exactly this email and the resume shown as attached.'
+                + (d.fallback ? ' <span style="color:#b45309;">(Standard email used - the AI could not write one that only uses facts from the resume.)</span>' : '');
+            $(`${prefix}-email-note`).textContent = '';
+        } catch (err) {
+            $(`${prefix}-email-status`).innerHTML = `<span style="color:#b91c1c;">${escapeHtml(err.message)}</span>`;
+        } finally { $(`btn-${prefix}-email-rewrite`).disabled = false; }
+    };
+    box.ask = async () => {
+        const instruction = $(`${prefix}-email-instr`).value.trim();
+        if (!instruction) return;
+        const btn = $(`btn-${prefix}-email-ai`);
+        btn.disabled = true; btn.textContent = 'Thinking...';
+        try {
+            const cur = { subject: $(`${prefix}-email-subject`).value, body: $(`${prefix}-email-body`).value };
+            const c = ctx();
+            const res = await fetch('/api/ai/personalize-draft', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(Object.assign({}, c, { instruction, current_subject: cur.subject, current_body: cur.body })) });
+            const d = await res.json().catch(() => ({}));
+            if (!res.ok || !d.success) { showToast(d.error || 'The AI could not answer.', 'error'); return; }
+            if (d.applied) {
+                box.undo.push(cur);
+                $(`btn-${prefix}-email-undo`).disabled = false;
+                $(`${prefix}-email-subject`).value = d.subject;
+                $(`${prefix}-email-body`).value = d.body;
+                $(`${prefix}-email-instr`).value = '';
+                $(`${prefix}-email-note`).textContent = `✓ ${d.lines_changed} line${d.lines_changed === 1 ? '' : 's'} changed`;
+            }
+            const extra = (d.needs_info || []).length ? ' ❓ ' + d.needs_info.join(' ❓ ') : '';
+            $(`${prefix}-email-status`).innerHTML = `<span style="color:${d.applied ? '#334155' : '#b45309'};">${escapeHtml((d.reply || '') + extra)}</span>`;
+        } finally { btn.disabled = false; btn.textContent = 'Ask AI'; }
+    };
+    return box;
 }
 
-async function doEmailAsk() {
-    const $ = id => document.getElementById(id);
-    const instruction = $('do-email-instr').value.trim();
-    if (!instruction) return;
-    const btn = $('btn-do-email-ai');
-    btn.disabled = true; btn.textContent = 'Thinking...';
+// The Optimize window's email (Jobs tab): written from the optimized resume on screen.
+const doBox = emailBox('do', () => ({ candidate_id: optPanel.candId, job_id: optPanel.jobId, jd_text: document.getElementById('do-jd').value,
+    resume_text: document.getElementById('do-optimized').value, to_email: (optPanel.emailInput ? optPanel.emailInput.value : '').trim() }));
+const doEmailGenerate = () => doBox.generate();
+
+// ---- Paste Requirement window: AI reading, match %, "already applied", and the same email component
+const pdState = { readTimer: null, read: null, lastRaw: '' };
+const pdVal = (id) => (document.getElementById(id)?.value || '').trim();
+const pdBox = emailBox('pd', () => ({ candidate_id: parseInt(pdVal('pd-consultant-select')) || null, job_title: pdVal('pd-title'), company: pdVal('pd-company'),
+    jd_text: pdVal('pd-raw-text'), to_email: pdVal('pd-email'), optimized_resume_id: pdResume.versionId || null, resume_text: pdResume.versionText || '' }));
+
+function pdInfo() {
+    const el = document.getElementById('pd-ai-info');
+    const r = pdState.read;
+    if (!el) return;
+    if (!r) { el.style.display = 'none'; el.innerHTML = ''; return; }
+    const bits = [r.title, r.company, r.location, r.employment_type, r.rate].filter(Boolean).map(escapeHtml).join(' · ');
+    const skills = (r.skills || []).length ? `<div style="color:#475569;">Skills: ${r.skills.map(escapeHtml).join(', ')}</div>` : '';
+    const m = pdState.match;
+    const match = !m ? '' : m.loading ? '<div style="color:#1e3a8a;">Checking the match for this consultant...</div>'
+        : m.error ? `<div style="color:#b45309;">Match check unavailable: ${escapeHtml(m.error)}</div>`
+        : `<div id="pd-match" style="font-weight:700; color:${m.match >= 60 ? '#059669' : '#b45309'};">Match for this consultant: ${m.match ?? '?'}%`
+          + (m.match != null && m.match < 60 ? ' - weak match, consider another consultant' : '') + `</div>`;
+    const dups = (pdState.dups || []).length ? `<div id="pd-dups" style="color:#b45309;">⚠ Already in the tracker: ${pdState.dups.map(d =>
+        `${escapeHtml(d.title || '')}${d.company ? ' - ' + escapeHtml(d.company) : ''} (${escapeHtml(d.status)}, ${escapeHtml(d.when)}, ${escapeHtml(d.why)})`).join('; ')}</div>` : '';
+    el.innerHTML = `<div><b>${r.ai ? '✨ AI read:' : 'Read:'}</b> ${bits || '(no details found)'}</div>${skills}${match}${dups}`;
+    el.style.display = '';
+}
+
+async function pdRead() {
+    const raw = pdVal('pd-raw-text');
+    if (raw.length < 80 || raw === pdState.lastRaw) return;
+    pdState.lastRaw = raw;
     try {
-        const cur = { subject: $('do-email-subject').value, body: $('do-email-body').value };
-        const res = await fetch('/api/ai/personalize-draft', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ candidate_id: optPanel.candId, job_id: optPanel.jobId, instruction, current_subject: cur.subject,
-                current_body: cur.body, resume_text: $('do-optimized').value }) });
+        const res = await fetch('/api/outreach/read-requirement', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ raw_text: raw, candidate_id: parseInt(pdVal('pd-consultant-select')) || null }) });
+        const r = await res.json().catch(() => ({}));
+        if (!res.ok || raw !== pdVal('pd-raw-text')) return;
+        pdState.read = r;
+        pdState.dups = r.duplicates || [];
+        const fill = (id, v) => { const el = document.getElementById(id); if (el && v && !el.value.trim()) el.value = v; };   // never overwrite what was typed
+        fill('pd-title', r.title); fill('pd-company', r.company); fill('pd-email', r.recruiter_email); fill('pd-rate', r.rate);
+        pdInfo();
+        pdMatch();
+        pdBox.generate();
+    } catch (err) { /* reading is a convenience - the form still works by hand */ }
+}
+
+async function pdMatch() {
+    const cid = parseInt(pdVal('pd-consultant-select'));
+    const jd = pdVal('pd-raw-text');
+    if (!cid || jd.length < 80 || !pdState.read) return;
+    pdState.match = { loading: true };
+    pdInfo();
+    try {
+        const res = await fetch('/api/outreach/match-check', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ candidate_id: cid, jd_text: jd }) });
         const d = await res.json().catch(() => ({}));
-        if (!res.ok || !d.success) { showToast(d.error || 'The AI could not answer.', 'error'); return; }
-        if (d.applied) {
-            optPanel.emailUndo.push(cur);
-            $('btn-do-email-undo').disabled = false;
-            $('do-email-subject').value = d.subject;
-            $('do-email-body').value = d.body;
-            $('do-email-instr').value = '';
-            $('do-email-note').textContent = `✓ ${d.lines_changed} line${d.lines_changed === 1 ? '' : 's'} changed`;
-        }
-        const extra = (d.needs_info || []).length ? ' ❓ ' + d.needs_info.join(' ❓ ') : '';
-        $('do-email-status').innerHTML = `<span style="color:${d.applied ? '#334155' : '#b45309'};">${escapeHtml((d.reply || '') + extra)}</span>`;
-    } finally { btn.disabled = false; btn.textContent = 'Ask AI'; }
+        if (cid !== parseInt(pdVal('pd-consultant-select'))) return;
+        pdState.match = res.ok ? d : { error: d.error || 'unknown' };
+    } catch (err) { pdState.match = { error: err.message }; }
+    pdInfo();
+}
+
+async function pdConsultantChanged() {
+    if (!pdState.read) return;
+    const cid = parseInt(pdVal('pd-consultant-select'));
+    try {
+        const res = await fetch('/api/outreach/read-requirement', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ duplicates_only: true, candidate_id: cid, title: pdVal('pd-title'), company: pdVal('pd-company'), recruiter_email: pdVal('pd-email') }) });
+        pdState.dups = (await res.json().catch(() => ({}))).duplicates || [];
+    } catch (err) { pdState.dups = []; }
+    pdInfo();
+    pdMatch();
+    pdBox.generate();
+}
+
+function pdResetAi() {
+    clearTimeout(pdState.readTimer);
+    Object.assign(pdState, { read: null, lastRaw: '', match: null, dups: [] });
+    pdInfo();
+    pdBox.reset();
 }
 
 async function jobOptimizeSaveAndDraft() {
@@ -5178,7 +5305,7 @@ async function jobOptimizeSaveAndDraft() {
     const to = $('do-email-to').value.trim();
     const subject = $('do-email-subject').value.trim();
     const body = $('do-email-body').value.trim();
-    if ($('do-email').style.display === 'none' || !body) { showToast('Wait for the email to be written (below the resumes), then save.', 'warning'); return; }
+    if (!doBox.visible() || !body) { showToast('Wait for the email to be written (below the resumes), then save.', 'warning'); return; }
     if (!to || !to.includes('@')) { showToast('Add the recipient email (To) in the email section first.', 'warning'); $('do-email-to').focus(); return; }
     if (/\[please (fill|add):/i.test(body) && !confirm('The email still has [please fill / add] parts. Create the draft anyway and fill them in Gmail?')) return;
     $('btn-do-save').disabled = true;

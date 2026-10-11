@@ -919,7 +919,8 @@ def prewarm():
             logger.warning(f"Gemini prewarm skipped: {ex}")
 
 
-def _ai_optimize(resume_text: str, jd_text: str, custom_instructions: str, docx_bytes: bytes = None, timings: dict = None):
+def _ai_optimize(resume_text: str, jd_text: str, custom_instructions: str, docx_bytes: bytes = None, timings: dict = None,
+                 analysis_only: bool = False):
     """Runs the master prompt through Gemini in two steps (analysis, then the complete rewritten
     resume). Returns (result, reason): result is the app's response dict, or None - never an
     exception - when AI is unavailable, with `reason` saying why (no key, free quota used up,
@@ -967,6 +968,8 @@ def _ai_optimize(resume_text: str, jd_text: str, custom_instructions: str, docx_
     if result is None:
         return None, plan                       # (None, reason)
     result["ai_model"] = model1
+    if analysis_only:          # match check (match_check): step 1 only - its answer is cached for the optimizer
+        return result, ""
 
     initial, level = result["initial_match_percentage"], result["enhancement_level"]
     if initial < 60:
@@ -1075,6 +1078,29 @@ def _keyword_analysis(resume_text: str, jd_text: str, ai_reason: str):
             f"a number built from so little would be meaningless. The AI analysis reads the whole JD."]),
         "updated_resume_text": resume_text,
     }
+
+
+def match_check(resume_text, jd_text, docx_bytes=None):
+    """Match % only (step 1 of the optimizer), prepared EXACTLY like optimize_resume_for_jd so its
+    analysis is cached and an Optimize right after reuses it instead of paying for it twice.
+    {match, decision, matched, missing, model} or {error}."""
+    jd_text = (jd_text or "").strip()
+    if docx_bytes is not None:
+        try:
+            resume_text = docx_editor.extract_text(docx_bytes)
+        except Exception:
+            pass
+    resume_text = (resume_text or "").strip()
+    if not resume_text or not jd_text:
+        return {"error": "Both resume and job description are required."}
+    jd_info = cloud_align.jd_cloud(jd_text)
+    block = cloud_align.prompt_block(jd_info, cloud_align.clouds_in(resume_text))
+    result, reason = _ai_optimize(resume_text, jd_text, block, None, {}, analysis_only=True)
+    if not result:
+        return {"error": reason or "The AI analysis is unavailable."}
+    return {"match": result.get("initial_match_percentage"), "decision": result.get("match_decision") or "",
+            "matched": result.get("mandatory_matched_skills") or [], "missing": result.get("mandatory_missing_skills") or [],
+            "model": result.get("ai_model") or ""}
 
 
 def optimize_resume_for_jd(resume_text, jd_text, custom_instructions="", docx_bytes=None):
