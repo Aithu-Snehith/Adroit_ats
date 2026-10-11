@@ -34,7 +34,7 @@ import india_job_scrapers
 import sourcing_tracker
 import vendors
 import job_experience
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import job_description_fetch
 from templates_bundle import EMBEDDED_LOGIN_HTML, EMBEDDED_DASHBOARD_HTML, EMBEDDED_STYLE_CSS, EMBEDDED_APP_JS
 
@@ -43,6 +43,7 @@ logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 app.secret_key = config.SECRET_KEY
+app.permanent_session_lifetime = timedelta(days=30)   # "Keep me signed in" on the login page
 if config.USING_DEFAULT_SECRET_KEY and config.ENV == "production":
     logger.warning("SECURITY: SECRET_KEY is not set, so sessions are signed with the publicly known default key. "
                    "Set SECRET_KEY to a long random value in the server environment.")
@@ -194,6 +195,8 @@ def login():
         user = models.authenticate_user(email, password)
         if user:
             session["user"] = user
+            # "Keep me signed in": the login survives closing the browser (30 days); otherwise it ends with the browser.
+            session.permanent = bool(request.form.get("remember") or (request.get_json(silent=True) or {}).get("remember"))
             models.log_activity(user["id"], user["name"], "User Logged In", "Auth", user["id"], f"User {user['name']} signed in")
             if request.is_json:
                 return jsonify({"success": True, "redirect": url_for("dashboard")})
