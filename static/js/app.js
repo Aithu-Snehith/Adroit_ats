@@ -3557,10 +3557,14 @@ async function eduSwitchFilter(filter) {
         btn.style.borderColor = on ? '#2563eb' : '#cbd5e1';
     });
     const isP = filter === 'P';
+    const isAll = filter === 'ALL';
     document.querySelectorAll('.edu-only-p').forEach(el => { el.style.display = isP ? '' : 'none'; });
     if (!eduLiveRunning && !studentsLiveSearchRunning) setStudentsSearchStatus('');
-    document.querySelectorAll('.edu-only-ab').forEach(el => { el.style.display = isP ? 'none' : ''; });
-    if (!isP) {
+    document.querySelectorAll('.edu-only-ab').forEach(el => { el.style.display = (isP || isAll) ? 'none' : ''; });
+    // The paid LinkedIn search needs a passout year or a college, so it isn't offered on "All saved profiles".
+    const live = document.getElementById('btn-apply-student-filter');
+    if (live) live.style.display = isAll ? 'none' : '';
+    if (!isP && !isAll) {
         const t = EDU_TEXT[filter];
         const label = document.getElementById('edu-inst-label');
         const input = document.getElementById('edu-inst-input');
@@ -3573,7 +3577,7 @@ async function eduSwitchFilter(filter) {
     document.getElementById('edu-pager').style.display = 'none';
     document.getElementById('btn-edu-export').disabled = true;
     eduSetStatus('');
-    if (isP) { eduSearch(1); return; }
+    if (isP || isAll) { eduSearch(1); return; }
     await eduLoadInstitutions(filter);
     if (eduState.selected[filter]) eduSearch(1);
 }
@@ -3679,7 +3683,7 @@ function eduOnTabOpen() {
 // After a paid LinkedIn search finishes, its profiles are in the database: refresh what's shown.
 function eduAfterLiveSearch() {
     eduState.institutions = { A: null, B: null };
-    if (eduState.filter === 'P') eduSearch(1);
+    if (eduState.filter === 'P' || eduState.filter === 'ALL') eduSearch(1);
 }
 
 function eduSetStatus(html) {
@@ -3715,8 +3719,9 @@ function eduParams(page) {
 
 async function eduSearch(page) {
     const isP = eduState.filter === 'P';
+    const isAll = eduState.filter === 'ALL';
     const inst = eduState.selected[eduState.filter];
-    if (!isP && !inst) {
+    if (!isP && !isAll && !inst) {
         eduSetStatus(`<span style="color:#b45309;">Pick ${eduState.filter === 'A' ? 'an Indian college' : 'a US university'} from the list first.</span>`);
         return;
     }
@@ -3739,16 +3744,16 @@ async function eduSearch(page) {
     eduRenderFacets(data.facets);
     const other = eduState.filter === 'B' ? "an Indian Bachelor's" : "a US Master's";
     const py = document.getElementById('filter-student-bachelor-year')?.value || 'All';
-    const what = isP ? `an Indian Bachelor's (${py === 'All' ? '2015 - 2023' : escapeHtml(py)}) and a US Master's`
+    const what = isAll ? 'saved LinkedIn profiles (all of them, no education rule)' : isP ? `an Indian Bachelor's (${py === 'All' ? '2015 - 2023' : escapeHtml(py)}) and a US Master's`
         : `${eduState.filter === 'A' ? "a Bachelor's" : "a Master's"} from <b>${escapeHtml(inst.name)}</b> and ${other}`;
     if (!data.total) {
-        eduSetStatus(isP
+        eduSetStatus(isAll ? 'No saved profiles match these filters.' : isP
             ? `No saved candidates with ${what} yet. Click <b>Search LinkedIn</b> to find some.`
             : `No saved profiles match <b>${escapeHtml(inst.name)}</b> + ${other} with these filters.`);
         wrap.style.display = 'none'; pager.style.display = 'none'; exportBtn.disabled = true;
         return;
     }
-    eduSetStatus(`<b>${data.total}</b> candidate${data.total === 1 ? '' : 's'} with ${what}.`);
+    eduSetStatus(isAll ? `<b>${data.total}</b> ${what}.` : `<b>${data.total}</b> candidate${data.total === 1 ? '' : 's'} with ${what}.`);
     const td = 'padding:10px 12px; border-bottom:1px solid #f1f5f9; vertical-align:top; color:#0f172a;';
     const statusOptions = (cur) => TRK_STATUSES.map(s => `<option${s === cur ? ' selected' : ''}>${escapeHtml(s)}</option>`).join('');
     const icon = (on, ch, title) => `<span title="${title}${on ? '' : ' - not saved yet'}" style="font-size:15px; opacity:${on ? 1 : 0.25};">${ch}</span>`;
@@ -3795,7 +3800,8 @@ function eduRenderCounts(c, shown) {
     set('edu-st-match', n(c.matching)); set('edu-st-match-sub', 'with the filters below');
     set('edu-st-otw', n(c.open_to_work)); set('edu-st-otw-sub', `in this search (${n(c.before_work)})`);
     set('edu-st-contact', n(c.has_contact)); set('edu-st-contact-sub', 'email or phone saved');
-    box.textContent = c.no_work_data ? `${n(c.no_work_data)} of these were scraped before Open-to-work / job type was saved, so the LinkedIn checkboxes skip them until they are scraped again.` : '';
+    box.innerHTML = c.no_work_data ? `${n(c.no_work_data)} of these were scraped before Open-to-work / job type was saved, so the LinkedIn checkboxes skip them until they are scraped again.`
+        + ((window.CURRENT_USER || {}).admin ? ` <button type="button" id="btn-fill-work-info" title="Reads the stored results of past LinkedIn searches again - no new scraping, costs well under 1 cent" style="margin-left:6px; padding:2px 10px; font-size:12px; font-weight:700; border:1px solid #93c5fd; border-radius:6px; background:#eff6ff; color:#1d4ed8; cursor:pointer;">↻ Fill from past searches (free)</button>` : '') : '';
     box.style.display = c.no_work_data ? 'block' : 'none';
     document.querySelectorAll('.edu-wc').forEach(s => {
         s.textContent = `(${n(c[s.getAttribute('data-key')])})`;
@@ -3864,7 +3870,7 @@ function eduFacetToggle(key) {
 
 function eduFacetChanged() {
     eduRenderFacets(null);
-    if (eduState.filter === 'P' || eduState.selected[eduState.filter]) eduSearch(1);
+    if (eduState.filter === 'P' || eduState.filter === 'ALL' || eduState.selected[eduState.filter]) eduSearch(1);
 }
 
 function initEduFacets() {
@@ -3898,6 +3904,23 @@ function initEduFacets() {
     document.addEventListener('click', (e) => {
         if (eduFacetOpen && !e.target.closest('.edu-dd')) eduFacetToggle(eduFacetOpen);
     });
+}
+
+async function eduFillWorkInfo(btn) {
+    btn.disabled = true;
+    btn.textContent = 'Reading past searches... (up to 2-3 min)';
+    try {
+        const res = await fetch('/api/admin/sourcing/fill-work-info', { method: 'POST' });
+        const d = await res.json().catch(() => ({}));
+        if (!res.ok) { showToast(d.error || 'Could not fill the LinkedIn details.', 'error', 7000); return; }
+        let msg = `Filled ${d.filled} profile${d.filled === 1 ? '' : 's'} from ${d.searches_read} past search${d.searches_read === 1 ? '' : 'es'}.`;
+        if (d.still_missing) msg += ` ${d.still_missing} still have no data (their searches have expired at Apify - they fill in when found again).`;
+        if (d.partial) msg += ' Not finished in time - click again to continue.';
+        if (d.error) msg += ' ' + d.error;
+        showToast(msg, d.filled ? 'success' : 'info', 10000);
+    } finally {
+        trkRefreshTable();
+    }
 }
 
 function eduExportExcel() {
@@ -4204,7 +4227,7 @@ async function trkRequest(url, body, method = 'POST') {
 }
 
 function trkRefreshTable() {
-    if (eduState.filter === 'P' || eduState.selected[eduState.filter]) eduSearch(eduState.page || 1);
+    if (eduState.filter === 'P' || eduState.filter === 'ALL' || eduState.selected[eduState.filter]) eduSearch(eduState.page || 1);
 }
 
 async function trkSaveCard() {
@@ -4320,6 +4343,10 @@ function initSourcingTracker() {
     document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && trkCurrentId) trkClose(); });
     document.getElementById('edu-status-filter')?.addEventListener('change', trkRefreshTable);
     initEduFacets();
+    document.getElementById('edu-counter')?.addEventListener('click', (e) => {
+        const b = e.target.closest('#btn-fill-work-info');
+        if (b) eduFillWorkInfo(b);
+    });
     ['edu-f-mine', 'edu-f-followup', 'edu-f-contact', 'edu-f-otw', 'edu-f-contract', 'edu-f-fulltime', 'edu-f-remote', 'edu-f-hybrid', 'edu-f-onsite'].forEach(id =>
         document.getElementById(id)?.addEventListener('change', trkRefreshTable));
 }

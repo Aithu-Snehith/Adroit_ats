@@ -88,14 +88,15 @@ try:
         page.fill("input[name=password]", PASSWORD)
         page.click("button[type=submit]")
         page.wait_for_url("**/dashboard**")
-        check("app.js?v=5.67.0" in page.content(), "cache-buster not bumped to 5.67.0")
+        check("app.js?v=5.69.0" in page.content(), "cache-buster not bumped to 5.69.0")
 
         page.click("a.nav-item[data-tab=sourcing]")
         page.wait_for_selector("#edu-panel", state="visible")
 
         # Passout tab is first and selected; its controls show, the college box doesn't
         tabs = page.eval_on_selector_all(".edu-tab", "els => els.map(e => [e.textContent.trim(), Math.round(e.getBoundingClientRect().top)])")
-        check([t[0] for t in tabs] == ["Passout Year", "Filter A: Indian College → US Master's", "Filter B: US University → Indian Undergrad"],
+        check([t[0] for t in tabs] == ["Passout Year", "Filter A: Indian College → US Master's", "Filter B: US University → Indian Undergrad",
+                                       "📚 All saved profiles"],
               f"tab order: {tabs}")
         check(len({t[1] for t in tabs}) == 1, f"tabs should sit in one row: {tabs}")
         check(page.is_visible("#filter-student-bachelor-year") and not page.is_visible("#edu-inst-input"), "passout controls")

@@ -2,7 +2,7 @@
 
 Each dropdown lists only values present in saved profiles, with how many each gives (the other
 dropdowns applied, not its own); several ticks in one dropdown = either; across dropdowns = all;
-college + year must be the SAME degree; location is read as a US state (full name or 2-letter) or
+college + year must be the SAME degree; the "All saved profiles" tab has no education rule; location is read as a US state (full name or 2-letter) or
 India; unknown values are refused; the Excel follows the dropdowns; they combine with the LinkedIn
 checkboxes. Nothing is paid - only saved profiles are read. Throwaway SQLite DB, no network.
 People are labelled test fixtures.
@@ -95,6 +95,24 @@ check(run(states="Atlantis")[0] == 400 and run(years="20x")[0] == 400, "unknown 
 x = client.get("/api/education/export-xlsx", query_string={"filter": "P", "passout_year": "All", "states": "Texas"})
 ws = load_workbook(io.BytesIO(x.data)).active
 check(x.status_code == 200 and ws.max_row - 1 == 2, f"Excel follows the dropdowns: {ws.max_row - 1} rows")
+
+# ---- "All saved profiles": no education rule - a profile without a US Master's is still reachable
+li.ingest_profiles(li.ApifyProfileProvider().to_profiles([{
+    "linkedinUrl": "https://www.linkedin.com/in/f-5.example.invalid", "firstName": "Farah", "lastName": "Facettest",
+    "headline": "QA Engineer", "location": {"linkedinText": "Houston, Texas"}, "currentPosition": [], "openToWork": True, "experience": [],
+    "education": [{"schoolName": "JNTUH", "degree": "B.Tech", "endDate": {"year": 2012}}]}]), "apify", ADMIN["id"])
+check(run()[1] == ["Anu", "Bhanu", "Chandu", "Divya"], "Passout tab unchanged (Farah has no US Master's)")
+code, names, d = run(filter="ALL")
+check(code == 200 and names == ["Anu", "Bhanu", "Chandu", "Divya", "Farah"], f"All saved profiles: {code} {names} {d.get('error')}")
+check(d["counts"]["matching"] == d["counts"]["total_scraped"] == 5, f"All tab matches the Total card: {d['counts']}")
+farah = next(x for x in d["results"] if x["name"].startswith("Farah"))
+check("2012" in farah["indian_college"] and farah["us_masters"] == "", f"row shows her Bachelor's: {farah}")
+check(run(filter="ALL", states="Texas")[1] == ["Anu", "Chandu", "Farah"], "All + Location")
+check(run(filter="ALL", open_to_work="1")[1] == ["Anu", "Farah"], "All + Open to work")
+check(2012 in [o["value"] for o in run(filter="ALL")[2]["facets"]["years"]], "year list includes years outside 2015-2023")
+x = client.get("/api/education/export-xlsx", query_string={"filter": "ALL"})
+check(x.status_code == 200 and load_workbook(io.BytesIO(x.data)).active.max_row - 1 == 5 and "All_saved_profiles" in x.headers.get("Content-Disposition", ""),
+      "Excel of all saved profiles")
 
 if failures:
     print(f"FAIL: {len(failures)} check(s) failed:")

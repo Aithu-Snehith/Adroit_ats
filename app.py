@@ -19,6 +19,7 @@ import cloud_align
 import resume_versions
 import application_tracker
 import regions
+import work_backfill
 import threading
 import apify_service
 import linkedin_sourcing
@@ -2398,6 +2399,23 @@ def _edu_user():
     return user, None
 
 
+@app.route("/api/admin/sourcing/fill-work-info", methods=["POST"])
+def api_sourcing_fill_work_info():
+    """Admin: fill Open to work / job type for profiles saved before the app kept them, by reading
+    the stored results of past searches again (no new scraping; ~$0.0004 per 1,000 rows read)."""
+    user, err = _edu_admin()
+    if err:
+        return err
+    conn = models.get_db_connection()
+    try:
+        stats = work_backfill.run(conn)
+    finally:
+        conn.close()
+    models.log_activity(user["id"], user["name"], "Filled LinkedIn work info", "Sourcing", 0,
+                        f"{stats['filled']} profiles filled from {stats['searches_read']} past searches; {stats['still_missing']} still without data")
+    return jsonify(stats)
+
+
 def _edu_admin():
     user = current_user()
     if not user:
@@ -2457,7 +2475,9 @@ def api_education_export_xlsx():
         rows = education_filters.export_rows(conn, params)
         cur = conn.cursor()
         inst_name = education_filters.display_name(conn, params["institution_id"])
-        if params["filter"] == "P":
+        if params["filter"] == "ALL":
+            label, inst_name = "All saved profiles", "All_saved_profiles"
+        elif params["filter"] == "P":
             span = (str(params["year_from"]) if params["year_from"] == params["year_to"]
                     else f"{params['year_from']}-{params['year_to']}")
             label = f"Passout {span}: Indian Bachelor's + US Master's"
@@ -2465,7 +2485,7 @@ def api_education_export_xlsx():
         else:
             label = ("Filter A: Indian college -> US Master's" if params["filter"] == "A"
                      else "Filter B: US university -> Indian undergrad") + f" | {inst_name}"
-        if params["filter"] != "P" and (params["year_from"] or params["year_to"]):
+        if params["filter"] in ("A", "B") and (params["year_from"] or params["year_to"]):
             label += f" | years {params['year_from'] or '...'}-{params['year_to'] or '...'}"
         if params["location"]:
             label += f" | location: {params['location']}"
@@ -2479,7 +2499,7 @@ def api_education_export_xlsx():
     models.log_activity(user["id"], user["name"], "Exported Excel", "Sourcing", 0, f"{len(rows)} candidates - {label}")
     # Email and phone are personal data: only admins get them in the Excel file.
     data = education_filters.build_xlsx(rows, label, include_contacts="Admin" in user.get("role", ""))
-    slug = re.sub(r"[^A-Za-z0-9]+", "_", inst_name if params["filter"] == "P" else f"Filter_{params['filter']}_{inst_name}").strip("_")[:80]
+    slug = re.sub(r"[^A-Za-z0-9]+", "_", inst_name if params["filter"] in ("P", "ALL") else f"Filter_{params['filter']}_{inst_name}").strip("_")[:80]
     return send_file(io.BytesIO(data), as_attachment=True, download_name=f"{slug}.xlsx",
                      mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 

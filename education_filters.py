@@ -34,6 +34,8 @@ FILTERS = {
     "P": {"chosen_level": "Bachelors", "chosen_country": "India", "other_level": "Masters", "other_country": "USA"},
     "A": {"chosen_level": "Bachelors", "chosen_country": "India", "other_level": "Masters", "other_country": "USA"},
     "B": {"chosen_level": "Masters", "chosen_country": "USA", "other_level": "Bachelors", "other_country": "India"},
+    # Every saved profile, no education rule (the dropdowns / checkboxes still narrow it).
+    "ALL": {"chosen_level": "Bachelors", "chosen_country": None, "other_level": "Masters", "other_country": None},
 }
 MAX_PAGE_SIZE = 100
 # Sourcing tracker statuses come from sourcing_tracker (a profile with no status yet is "New").
@@ -80,8 +82,10 @@ def _year(v) -> Optional[int]:
 def parse_params(args: Dict) -> Dict:
     f = str(args.get("filter") or "").strip().upper()
     if f not in FILTERS:
-        raise FilterError("filter must be 'P', 'A' or 'B'")
-    if f == "P":
+        raise FilterError("filter must be 'P', 'A', 'B' or 'ALL'")
+    if f == "ALL":
+        inst, y_from, y_to = None, None, None
+    elif f == "P":
         inst = None
         py = str(args.get("passout_year") or "").strip()
         if py.lower() == "all":
@@ -170,6 +174,8 @@ def _like(text: str) -> str:
 
 
 def _where(p: Dict):
+    if p["filter"] == "ALL":
+        return _common_where(["1 = 1"], [], p)
     spec = FILTERS[p["filter"]]
     members = member_ids(p["institution_id"])
     clauses = ["""EXISTS (SELECT 1 FROM profile_education c WHERE c.profile_id = p.id AND c.degree_level = ?
@@ -205,6 +211,11 @@ def _where(p: Dict):
         clauses = [f"""(({edu_sql}) OR EXISTS (SELECT 1 FROM profile_verifications v WHERE v.profile_id = p.id
                         AND v.filter_key = ? AND v.institution_id IN ({", ".join(["?"] * len(members))}){vyears}))"""]
         params = [*edu_params, p["filter"], *members, *vparams]
+    return _common_where(clauses, params, p)
+
+
+def _common_where(clauses: List[str], params: List, p: Dict):
+    """Status / owner / follow-up / contact / location / keyword - the same on every tab."""
     if p.get("status") == "New":
         clauses.append("(p.tracking_status IS NULL OR p.tracking_status = '' OR p.tracking_status = 'New')")
     elif p.get("status"):
@@ -408,9 +419,15 @@ def _decorate(conn, p: Dict, rows: List[Dict]) -> List[Dict]:
     out = []
     for r in rows:
         edu = by_profile.get(r["id"], [])
-        chosen = [e for e in edu if e["degree_level"] == spec["chosen_level"] and (members is None or e["institution_canonical_id"] in members)
+        if p["filter"] == "ALL":   # no education rule: show every Bachelor's and Master's entry
+            chosen = [e for e in edu if e["degree_level"] == "Bachelors"]
+            other = [e for e in edu if e["degree_level"] == "Masters"]
+        else:
+            chosen = None
+        chosen = chosen if chosen is not None else [e for e in edu if e["degree_level"] == spec["chosen_level"] and (members is None or e["institution_canonical_id"] in members)
                   and e["country"] == spec["chosen_country"] and _in_range(e["end_year"], p)]
-        other = [e for e in edu if e["degree_level"] == spec["other_level"] and e["country"] == spec["other_country"]]
+        if p["filter"] != "ALL":
+            other = [e for e in edu if e["degree_level"] == spec["other_level"] and e["country"] == spec["other_country"]]
         if p["filter"] in ("A", "B") and members and (not chosen or not other):
             # Verified by a Filter A/B LinkedIn search but the OTHER school isn't on the college list:
             # show the profile's entries the search verified.

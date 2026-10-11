@@ -42,6 +42,10 @@ def item(slug, first, college, year, loc):
 li.ingest_profiles(li.ApifyProfileProvider().to_profiles([
     item("fu-1", "Arjun", "JNTUH", 2019, "Dallas, Texas"), item("fu-2", "Bhavya", "JNTUH", 2022, "San Jose, California"),
     item("fu-3", "Charvi", "CBIT", 2022, "Austin, TX")]), "apify", None)
+li.ingest_profiles(li.ApifyProfileProvider().to_profiles([{   # no US Master's: only on "All saved profiles"
+    "linkedinUrl": "https://www.linkedin.com/in/fu-4.example.invalid", "firstName": "Dev", "lastName": "Facetui", "headline": "QA",
+    "location": {"linkedinText": "Houston, Texas"}, "currentPosition": [], "openToWork": None, "experience": [],
+    "education": [{"schoolName": "JNTUH", "degree": "B.Tech", "endDate": {"year": 2012}}]}]), "apify", None)
 
 with socket.socket() as sk:
     sk.bind(("127.0.0.1", 0))
@@ -68,11 +72,11 @@ try:
         page.fill("input[name=password]", PASSWORD)
         page.click("button[type=submit]")
         page.wait_for_url("**/dashboard**")
-        check("app.js?v=5.67.0" in page.content(), "cache-buster not bumped to 5.67.0")
+        check("app.js?v=5.69.0" in page.content(), "cache-buster not bumped to 5.69.0")
         page.click("a.nav-item[data-tab=sourcing]")
         page.select_option("#filter-student-bachelor-year", "All")
         page.wait_for_function(f"{ROWS} === 3", timeout=15000)
-        check(page.inner_text("#edu-st-total") == "3" and page.inner_text("#edu-st-match") == "3", "cards show totals")
+        check(page.inner_text("#edu-st-total") == "4" and page.inner_text("#edu-st-match") == "3", "cards: 4 saved, 3 on the Passout tab")
         check(page.is_visible("#btn-apply-student-filter"), "paid Search LinkedIn button still there")
 
         # College dropdown: search box + counts
@@ -117,6 +121,15 @@ try:
         page.locator(".edu-dd-panel[data-facet=states] label", has_text="Texas").locator("input").check()
         page.wait_for_function(f"{ROWS} === 2", timeout=10000)
         check(sorted(page.eval_on_selector_all("#edu-results tr[data-pid] td:first-child a", "els => els.map(e => e.textContent.trim().split(' ')[0])")) == ["Arjun", "Charvi"], "Texas")
+        # All saved profiles: every one of the 4, paid search hidden
+        page.click("#edu-facet-clear-all") if page.is_visible("#edu-facet-clear-all") else None
+        page.click(".edu-tab[data-filter=ALL]")
+        page.wait_for_function(f"{ROWS} === 4", timeout=10000)
+        check(page.inner_text("#edu-st-match") == "4" and "Dev" in page.inner_text("#edu-results"), "All tab shows every saved profile")
+        check(not page.is_visible("#btn-apply-student-filter"), "paid search hidden on All saved profiles")
+        page.click(".edu-tab[data-filter=P]")
+        page.wait_for_function(f"{ROWS} === 3", timeout=10000)
+        check(page.is_visible("#btn-apply-student-filter"), "paid search back on Passout tab")
         browser.close()
 finally:
     server.shutdown()

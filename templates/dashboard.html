@@ -347,6 +347,7 @@
                             <button type="button" role="tab" class="edu-tab" data-filter="P" style="padding:8px 16px; border-radius:8px; border:1px solid #cbd5e1; background:#ffffff; color:#334155; font-weight:700; font-size:13px; cursor:pointer;">Passout Year</button>
                             <button type="button" role="tab" class="edu-tab" data-filter="A" style="padding:8px 16px; border-radius:8px; border:1px solid #cbd5e1; background:#ffffff; color:#334155; font-weight:700; font-size:13px; cursor:pointer;">Filter A: Indian College → US Master's</button>
                             <button type="button" role="tab" class="edu-tab" data-filter="B" style="padding:8px 16px; border-radius:8px; border:1px solid #cbd5e1; background:#ffffff; color:#334155; font-weight:700; font-size:13px; cursor:pointer;">Filter B: US University → Indian Undergrad</button>
+                            <button type="button" role="tab" class="edu-tab" data-filter="ALL" title="Every saved LinkedIn profile - no college / Master's rule" style="padding:8px 16px; border-radius:8px; border:1px solid #cbd5e1; background:#ffffff; color:#334155; font-weight:700; font-size:13px; cursor:pointer;">📚 All saved profiles</button>
                         </div>
 
                         <form id="form-edu-search" onsubmit="return false;" style="display:flex; flex-wrap:wrap; gap:10px; align-items:flex-end;">
@@ -1371,7 +1372,7 @@
     <aside id="trk-drawer" aria-label="Candidate tracking card" style="position:fixed; top:0; right:0; height:100vh; width:min(480px, 100vw); background:#ffffff; box-shadow:-12px 0 30px rgba(15,23,42,0.18); z-index:1201; transform:translateX(105%); transition:transform 0.2s ease; overflow-y:auto; box-sizing:border-box;"></aside>
     <script>window.CURRENT_USER = {{ {'id': user.id, 'admin': ('Admin' in (user.role or ''))} | tojson }};
         window.VIEW_REGION = {{ view_region | tojson }};</script>
-    <script src="/static/js/app.js?v=5.67.0"></script>
+    <script src="/static/js/app.js?v=5.69.0"></script>
 
     <!-- Recruiter Management Inline Fallback: app.js defines all of these with toast-based
          feedback and no page reloads. These only fire if app.js somehow failed to load -
