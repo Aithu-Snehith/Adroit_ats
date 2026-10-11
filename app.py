@@ -1406,7 +1406,8 @@ def api_application_preview():
     b = application_brief.build(cand, job, str(data.get("jd_text") or "")[:20000],
                                 version_id=_int_or_none(data.get("optimized_resume_id")),
                                 default_to=(data.get("to_email") or job.get("recruiter_email") or "").strip(),
-                                resume_text=str(data.get("resume_text") or "")[:20000])
+                                resume_text=str(data.get("resume_text") or "")[:20000],
+                                tailored=None if data.get("tailored") is None else bool(data.get("tailored")))
     return jsonify({"to": b["to"], "subject": b["subject"], "body": b["body"], "checklist": b["checklist"],
                     "needs_input": b["needs_input"], "fallback": b["fallback"]})
 

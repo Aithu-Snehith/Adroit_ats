@@ -75,12 +75,15 @@ def fake_generate(client, types, system, prompt, want_json, max_tokens):
                            "questions": [], "required_details": ["notice period"], "experience_min": None, "experience_max": None,
                            "must_have_skills": ["AWS", "Terraform"]}), False, "stub"
     if system == ab.WRITE_SYSTEM:
+        write_prompts.append(prompt)
         return json.dumps({"body": BODY, "answered": [], "needs_input": []}), False, "stub"
     if want_json:       # optimizer step 1 (analysis)
         return json.dumps(ANALYSIS), False, "stub"
-    return "", False, "stub"
+    return REWRITE["text"], False, "stub"
 
 
+write_prompts = []
+REWRITE = {"text": ""}      # "" = the optimizer changes nothing (resume left as it is)
 rb._generate = fake_generate
 rb.ai_configured = lambda: True
 rb.gemini_configured = lambda: False
@@ -178,7 +181,7 @@ try:
         page.fill("input[name=password]", PW)
         page.click("button[type=submit]")
         page.wait_for_url("**/dashboard**")
-        check("app.js?v=5.76.0" in page.content(), "cache-buster not bumped to 5.76.0")
+        check("app.js?v=5.77.0" in page.content(), "cache-buster not bumped to 5.77.0")
         page.wait_for_function("typeof state !== 'undefined' && state.consultants && state.consultants.length", timeout=15000)
         page.evaluate(f"openPasteDraftModal({cid})")
         page.fill("#pd-title", "My Own Title")
@@ -202,6 +205,40 @@ try:
         check(dialogs and "[please fill" in dialogs[0], f"asked before drafting with [please fill]: {dialogs}")
         check(m is not None and m["To"] == "jobs@acmebank.example" and m["Subject"] == "Senior DevOps Engineer Application" and "EDITED IN PASTE WINDOW" in body,
               f"draft = the email shown: {m and (m['To'], m['Subject'])}")
+
+        # ---- Optimize from the Paste window: the email is shown there too and comes back
+        page.evaluate(f"openPasteDraftModal({cid})")
+        page.fill("#pd-raw-text", RAW + "\nSecond paste.")
+        page.dispatch_event("#pd-raw-text", "input")
+        page.wait_for_function("document.getElementById('pd-email-body') && document.getElementById('pd-email-body').value.includes('Globex')", timeout=15000)
+        page.click("#btn-pd-optimize")
+        # (a) resume left unchanged -> the email still appears, written from the ORIGINAL resume
+        page.wait_for_function("document.getElementById('do-email-body') && document.getElementById('do-email-body').value.includes('Globex')", timeout=20000)
+        check(page.is_visible("#do-email-box") and "was tailored" not in write_prompts[-1], "unchanged resume: email shown, not called 'tailored'")
+        page.fill("#do-email-body", page.input_value("#do-email-body") + "\nEDIT IN OPTIMIZE (UNCHANGED)")
+        page.click("#btn-close-draft-optimize")
+        check(page.input_value("#pd-email-body").endswith("EDIT IN OPTIMIZE (UNCHANGED)"), "closing carries the email back to the Paste window")
+        # (b) a real optimization -> Save & use in this draft carries the edited email + the tailored resume
+        REWRITE["text"] = "[1] Senior DevOps Engineer, 8 years. Terraform on AWS, EKS clusters for banking, GitHub Actions pipelines at Globex."
+        page.click("#btn-pd-optimize")
+        page.wait_for_selector("#modal-draft-optimize", state="visible")
+        page.click("#btn-do-reoptimize")
+        page.wait_for_function("!document.getElementById('btn-do-save').disabled", timeout=20000)
+        page.wait_for_function("document.getElementById('do-email-body').value.includes('Globex') && !document.getElementById('btn-do-email-rewrite').disabled", timeout=20000)
+        check("was tailored" in write_prompts[-1], "optimized resume: email written as tailored")
+        page.fill("#do-email-body", page.input_value("#do-email-body") + "\nEDIT IN OPTIMIZE (SAVED)")
+        page.click("#btn-do-save")
+        page.wait_for_function("document.getElementById('modal-draft-optimize').style.display === 'none'", timeout=15000)
+        check(page.input_value("#pd-email-body").endswith("EDIT IN OPTIMIZE (SAVED)") and "Arun" in page.inner_text("#pd-resume-version"),
+              f"Save & use: the email and the tailored resume go to the Paste window: {page.inner_text('#pd-resume-version')!r}")
+        n0 = len(captured)
+        page.click("#btn-submit-paste-draft")
+        page.wait_for_function(f"document.querySelectorAll('.toast').length && {n0} < 99", timeout=5000)
+        page.wait_for_timeout(2500)
+        m2 = captured[-1] if len(captured) > n0 else None
+        b2 = m2.get_body(preferencelist=("plain",)).get_content() if m2 else ""
+        att2 = [x.get_filename() for x in m2.iter_attachments()] if m2 else []
+        check("EDIT IN OPTIMIZE (SAVED)" in b2 and att2 and att2[0].startswith("Arun"), f"draft = that email + the tailored resume: {att2}")
         browser.close()
 finally:
     server.shutdown()

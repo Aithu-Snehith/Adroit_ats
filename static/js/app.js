@@ -4921,7 +4921,10 @@ function initDraftOptimize() {
         openOptimizePanel({ mode: 'paste', candId, jdText: jd });
     });
     $('btn-do-reoptimize').addEventListener('click', () => draftOptimizeRun(false));
-    const close = () => { $('modal-draft-optimize').style.display = 'none'; };
+    const close = () => {
+        $('modal-draft-optimize').style.display = 'none';
+        if (optPanel.mode !== 'job' && doBox.visible()) pdBox.set(doBox.values(), 'Carried over from the Optimize window - check it, then Create Gmail Draft.');
+    };
     $('btn-close-draft-optimize').addEventListener('click', close);
     $('btn-do-discard').addEventListener('click', () => { pdResume.result = null; delete optCache[optKey()]; close(); showToast('Discarded - nothing was saved.', 'info'); });
     $('do-optimized').addEventListener('input', () => { const c = optCache[optKey()]; if (c) c.edited = $('do-optimized').value; });
@@ -4986,7 +4989,7 @@ async function optRestore(opts) {
     $('btn-do-download').style.display = '';
     $('btn-do-reoptimize').disabled = false;
     if (($('do-jd').value || '').trim().length < 30) $('do-jd').value = opts.jdText || opts.summary || '';
-    if (opts.mode === 'job') doEmailGenerate();
+    doEmailGenerate();
     return true;
 }
 
@@ -5033,7 +5036,9 @@ async function draftOptimizeRun(firstTime) {
             ? `Will be saved as <b>${escapeHtml(data.suggested_filename)}</b>${optPanel.mode === 'job' ? ' and attached to this job\'s draft' : ' and attached to this draft'}.` : '';
         $('btn-do-save').disabled = !data.optimized;
         $('btn-do-download').style.display = data.optimized ? '' : 'none';
-        if (data.optimized && optPanel.mode === 'job') doEmailGenerate();     // show the email before anything is drafted
+        // show the email before anything is drafted (from the Paste window always - written from the original
+        // resume when the optimizer left it unchanged)
+        if (data.optimized || (optPanel.mode !== 'job' && data.ai_powered !== false)) doEmailGenerate();
     } catch (err) {
         $('do-status').innerHTML = `<span style="color:#b91c1c;">${escapeHtml(err.message)}</span>`;
     } finally {
@@ -5078,8 +5083,13 @@ async function draftOptimizeSave() {
             (d.note ? `<div style="color:#b45309;">${escapeHtml(d.note)}</div>` : '');
         $('pd-use-original').addEventListener('click', (e) => { e.preventDefault(); pdResumeReset(); });
         $('modal-draft-optimize').style.display = 'none';
-        showToast(`Saved ${d.filename} - it will be attached to this draft. Rewriting the email from it...`, 'success', 6000);
-        if (pdState.read || pdBox.visible()) pdBox.generate();
+        if (doBox.visible()) {
+            pdBox.set(doBox.values(), `Email from the Optimize window, written from ${d.filename} - check it, then Create Gmail Draft.`);
+            showToast(`Saved ${d.filename} - it and this email will be used for the draft.`, 'success', 6000);
+        } else {
+            showToast(`Saved ${d.filename} - it will be attached to this draft. Writing the email from it...`, 'success', 6000);
+            pdBox.generate();
+        }
     } catch (err) {
         showToast(err.message, 'error', 6000);
         $('btn-do-save').disabled = false;
@@ -5165,7 +5175,19 @@ function emailBox(prefix, ctx) {
     };
     box.reset = () => { box.undo = []; const el = $(`${prefix}-email-box`); if (el) el.style.display = 'none'; if (box.rendered) { $(`${prefix}-email-body`).value = ''; } };
     box.visible = () => { const el = $(`${prefix}-email-box`); return !!el && el.style.display !== 'none' && !!(box.rendered && $(`${prefix}-email-body`).value.trim()); };
-    box.values = () => ({ to: $(`${prefix}-email-to`).value.trim(), subject: $(`${prefix}-email-subject`).value.trim(), body: $(`${prefix}-email-body`).value.trim() });
+    box.values = () => ({ to: $(`${prefix}-email-to`).value.trim(), subject: $(`${prefix}-email-subject`).value.trim(), body: $(`${prefix}-email-body`).value.trim(),
+        checklist: box.rendered ? $(`${prefix}-email-checklist`).innerHTML : '' });
+    box.set = (v, note) => {      // an email carried over from another box (Optimize window -> Paste window)
+        render();
+        $(`${prefix}-email-box`).style.display = '';
+        if ($(`${prefix}-email-body`).value && $(`${prefix}-email-body`).value !== v.body) { box.undo.push({ subject: $(`${prefix}-email-subject`).value, body: $(`${prefix}-email-body`).value }); $(`btn-${prefix}-email-undo`).disabled = false; }
+        $(`${prefix}-email-to`).value = v.to || '';
+        $(`${prefix}-email-subject`).value = v.subject || '';
+        $(`${prefix}-email-body`).value = v.body || '';
+        $(`${prefix}-email-checklist`).innerHTML = v.checklist || '';
+        $(`${prefix}-email-checklist`).style.display = v.checklist ? '' : 'none';
+        $(`${prefix}-email-status`).innerHTML = escapeHtml(note || '');
+    };
     box.generate = async () => {
         render();
         $(`${prefix}-email-box`).style.display = '';
@@ -5218,15 +5240,22 @@ function emailBox(prefix, ctx) {
 }
 
 // The Optimize window's email (Jobs tab): written from the optimized resume on screen.
-const doBox = emailBox('do', () => ({ candidate_id: optPanel.candId, job_id: optPanel.jobId, jd_text: document.getElementById('do-jd').value,
-    resume_text: document.getElementById('do-optimized').value, to_email: (optPanel.emailInput ? optPanel.emailInput.value : '').trim() }));
+const doBox = emailBox('do', () => {
+    const paste = optPanel.mode !== 'job';
+    const v = (id) => (document.getElementById(id)?.value || '').trim();
+    return { candidate_id: optPanel.candId, job_id: paste ? null : optPanel.jobId, jd_text: document.getElementById('do-jd').value,
+        job_title: paste ? v('pd-title') : '', company: paste ? v('pd-company') : '',
+        resume_text: document.getElementById('do-optimized').value, tailored: !!(pdResume.result && pdResume.result.optimized),
+        to_email: paste ? v('pd-email') : (optPanel.emailInput ? optPanel.emailInput.value : '').trim() };
+});
 const doEmailGenerate = () => doBox.generate();
 
 // ---- Paste Requirement window: AI reading, match %, "already applied", and the same email component
 const pdState = { readTimer: null, read: null, lastRaw: '' };
 const pdVal = (id) => (document.getElementById(id)?.value || '').trim();
 const pdBox = emailBox('pd', () => ({ candidate_id: parseInt(pdVal('pd-consultant-select')) || null, job_title: pdVal('pd-title'), company: pdVal('pd-company'),
-    jd_text: pdVal('pd-raw-text'), to_email: pdVal('pd-email'), optimized_resume_id: pdResume.versionId || null, resume_text: pdResume.versionText || '' }));
+    jd_text: pdVal('pd-raw-text'), to_email: pdVal('pd-email'), optimized_resume_id: pdResume.versionId || null, resume_text: pdResume.versionText || '',
+    tailored: !!pdResume.versionId }));
 
 function pdInfo() {
     const el = document.getElementById('pd-ai-info');

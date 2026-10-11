@@ -88,7 +88,7 @@ try:
 
         # ---- Asha uploads
         page = open_vendors(browser, "asha")
-        check("app.js?v=5.76.0" in page.content(), "cache-buster not bumped to 5.76.0")
+        check("app.js?v=5.77.0" in page.content(), "cache-buster not bumped to 5.77.0")
         check(page.is_visible("#tab-vendors") and "No vendor contacts yet" in page.inner_text("#vendors-body"), "empty state")
         check(not page.is_visible("#vendors-owner"), "recruiter has no Recruiter filter")
         check(page.get_attribute("#vendors-template", "href") == "/api/vendors/template", "template link")

@@ -67,7 +67,8 @@ ANALYSIS = {"initial_match_percentage": 72, "match_breakdown": {"mandatory_skill
 
 
 def fake_generate(client, types, system, prompt, want_json, max_tokens):
-    ai_calls.append("analysis" if want_json else "rewrite")
+    # label the optimizer's own calls; email reading / writing calls (Paste window) are "other"
+    ai_calls.append("rewrite" if not want_json else "analysis" if rb._ANALYSIS_CONTRACT in system else "other")
     return (json.dumps(ANALYSIS), False, "stub") if want_json else ("[4] Java, Spring Boot, React", False, "stub")
 
 
@@ -112,7 +113,7 @@ try:
         page.fill("input[name=password]", PASSWORD)
         page.click("button[type=submit]")
         page.wait_for_url("**/dashboard**")
-        check("app.js?v=5.76.0" in page.content(), "cache-buster not bumped to 5.76.0")
+        check("app.js?v=5.77.0" in page.content(), "cache-buster not bumped to 5.77.0")
         page.wait_for_function("state.consultants && state.consultants.length >= 1", timeout=15000)
 
         # ---- Paste & Draft: optimize -> discard -> re-optimize -> edit -> save -> draft attaches it
@@ -133,7 +134,7 @@ try:
         page.wait_for_function("!document.getElementById('btn-do-save').disabled", timeout=20000)
         page.click("#btn-do-reoptimize")
         page.wait_for_function("!document.getElementById('btn-do-save').disabled", timeout=20000)
-        check(ai_calls == ["rewrite", "rewrite"], f"same resume + JD: the analysis from the first run is reused: {ai_calls}")
+        check([c for c in ai_calls if c != "other"] == ["rewrite", "rewrite"], f"same resume + JD: the analysis from the first run is reused: {ai_calls}")
         page.fill("#do-optimized", page.input_value("#do-optimized").replace("Java developer with 6 years", "Java full stack developer with 6 years"))
         page.screenshot(path=shot)
         page.click("#btn-do-save")
