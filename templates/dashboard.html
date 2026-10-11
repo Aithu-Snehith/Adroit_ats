@@ -1372,7 +1372,7 @@
     <aside id="trk-drawer" aria-label="Candidate tracking card" style="position:fixed; top:0; right:0; height:100vh; width:min(480px, 100vw); background:#ffffff; box-shadow:-12px 0 30px rgba(15,23,42,0.18); z-index:1201; transform:translateX(105%); transition:transform 0.2s ease; overflow-y:auto; box-sizing:border-box;"></aside>
     <script>window.CURRENT_USER = {{ {'id': user.id, 'admin': ('Admin' in (user.role or ''))} | tojson }};
         window.VIEW_REGION = {{ view_region | tojson }};</script>
-    <script src="/static/js/app.js?v=5.69.0"></script>
+    <script src="/static/js/app.js?v=5.70.0"></script>
 
     <!-- Recruiter Management Inline Fallback: app.js defines all of these with toast-based
          feedback and no page reloads. These only fire if app.js somehow failed to load -
@@ -1515,72 +1515,71 @@
                 <button type="button" onclick="closeAiCopilotModal()" style="background: none; border: none; color: #94a3b8; font-size: 1.6rem; cursor: pointer; padding: 4px; line-height: 1;" title="Close">&times;</button>
             </div>
 
-            <!-- Two-Column Workspace -->
-            <div style="display: grid; grid-template-columns: 1fr 1.1fr; flex: 1; min-height: 480px; overflow: hidden; background: #f8fafc;">
+            <!-- Two-Column Workspace (min-height:0 lets each column scroll instead of pushing the footer off screen) -->
+            <div style="display: grid; grid-template-columns: 1fr 1.1fr; flex: 1; min-height: 0; overflow: hidden; background: #f8fafc;">
                 <!-- Left: Chat Assistant -->
-                <div style="display: flex; flex-direction: column; border-right: 1px solid #e2e8f0; background: #ffffff;">
+                <div style="display: flex; flex-direction: column; min-height: 0; border-right: 1px solid #e2e8f0; background: #ffffff;">
                     <div style="padding: 14px 18px; border-bottom: 1px solid #f1f5f9; background: #f8fafc; display: flex; justify-content: space-between; align-items: center;">
                         <div>
                             <span style="font-size: 0.75rem; font-weight: 700; text-transform: uppercase; color: #475569; letter-spacing: 0.05em;">AI Chat Assistant</span>
-                            <div style="font-size: 0.75rem; color: #94a3b8;">Chat to adjust tone, rate, or highlighted skills</div>
+                            <div style="font-size: 0.75rem; color: #94a3b8;">Tell it what to change - it edits the email on the right, using only facts on file</div>
                         </div>
-                        <span style="font-size: 0.7rem; background: #eff6ff; color: #2563eb; padding: 2px 8px; border-radius: 9999px; font-weight: 600;">Adroit AI</span>
+                        <span style="font-size: 0.7rem; background: #eff6ff; color: #2563eb; padding: 2px 8px; border-radius: 9999px; font-weight: 600; white-space: nowrap; flex-shrink: 0;">Job Hunt AI</span>
                     </div>
 
                     <!-- Chat Message Stream -->
-                    <div id="copilot-chat-messages" style="flex: 1; overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 12px;">
-                        <!-- Messages dynamically added -->
-                    </div>
+                    <div id="copilot-chat-messages" style="flex: 1; min-height: 0; overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 12px;"></div>
 
                     <!-- Quick Prompt Chips -->
-                    <div style="padding: 10px 14px; border-top: 1px solid #f1f5f9; display: flex; gap: 6px; flex-wrap: wrap; background: #f8fafc;">
-                        <button type="button" class="btn-prompt-chip" onclick="applyCopilotQuickPrompt('Highlight AWS, Kafka & Microservices')">⚡ AWS & Microservices</button>
-                        <button type="button" class="btn-prompt-chip" onclick="applyCopilotQuickPrompt('Set C2C rate to $95/hr negotiable')">💼 $95/hr C2C</button>
-                        <button type="button" class="btn-prompt-chip" onclick="applyCopilotQuickPrompt('Make it concise, 3 sentences max, warm tone')">🎯 Short & Sweet</button>
-                        <button type="button" class="btn-prompt-chip" onclick="applyCopilotQuickPrompt('Mention candidate is immediately available for interviews')">🚀 Immediate Available</button>
+                    <div id="copilot-chips" style="padding: 10px 14px; border-top: 1px solid #f1f5f9; display: flex; gap: 6px; flex-wrap: wrap; background: #f8fafc;">
+                        <button type="button" class="btn-prompt-chip" onclick="applyCopilotQuickPrompt('Make it shorter - 3 or 4 sentences, keep the signature')">✂️ Shorter</button>
+                        <button type="button" class="btn-prompt-chip" onclick="applyCopilotQuickPrompt('Make the tone warmer and friendlier')">😊 Warmer</button>
+                        <button type="button" class="btn-prompt-chip" onclick="applyCopilotQuickPrompt('Make the tone more formal and professional')">👔 More formal</button>
+                        <button type="button" class="btn-prompt-chip" onclick="applyCopilotQuickPrompt('Say the consultant is available for interviews at the recruiter\'s convenience')">📅 Add availability</button>
+                        <button type="button" class="btn-prompt-chip" onclick="applyCopilotQuickPrompt('Highlight the consultant\'s skills that best match this job description')">🎯 Top skills for this JD</button>
+                        <button type="button" class="btn-prompt-chip" id="copilot-chip-rate" style="display:none;" onclick="applyCopilotQuickPrompt('Mention the consultant\'s rate on file')">💼 Add rate on file</button>
+                        <button type="button" class="btn-prompt-chip" onclick="applyCopilotQuickPrompt('Suggest a better subject line')">✉️ Suggest subject</button>
                     </div>
 
                     <!-- Chat Input Box -->
                     <div style="padding: 14px; border-top: 1px solid #e2e8f0; display: flex; gap: 8px; background: #ffffff;">
-                        <input type="text" id="copilot-user-input" placeholder="Type instructions (e.g. 'Make it short, highlight Python')..." style="flex: 1; padding: 10px 14px; border: 1px solid #cbd5e1; border-radius: 8px; font-size: 0.85rem;" onkeydown="if(event.key==='Enter') sendCopilotInstruction()">
-                        <button type="button" class="btn btn-primary" id="btn-copilot-send" onclick="sendCopilotInstruction()" style="padding: 10px 16px; font-weight: 600;">
-                            Send
-                        </button>
+                        <input type="text" id="copilot-user-input" placeholder="e.g. 'Say he can interview Tuesday 2-5 PM IST'" style="flex: 1; padding: 10px 14px; border: 1px solid #cbd5e1; border-radius: 8px; font-size: 0.85rem;" onkeydown="if(event.key==='Enter') sendCopilotInstruction()">
+                        <button type="button" class="btn btn-primary" id="btn-copilot-send" onclick="sendCopilotInstruction()" style="padding: 10px 16px; font-weight: 600;">Send</button>
                     </div>
                 </div>
 
-                <!-- Right: Live Editable Draft Preview -->
-                <div style="display: flex; flex-direction: column; background: #ffffff; padding: 18px 20px; overflow-y: auto;">
-                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
-                        <span style="font-size: 0.75rem; font-weight: 700; text-transform: uppercase; color: #475569; letter-spacing: 0.05em;">Live Email Draft Preview</span>
-                        <span class="badge" style="background: #ecfdf5; color: #059669; border: 1px solid #a7f3d0; font-size: 0.75rem; padding: 2px 8px; border-radius: 9999px;">Directly Editable</span>
-                    </div>
-
-                    <div style="margin-bottom: 10px;">
-                        <label style="font-size: 0.75rem; font-weight: 600; color: #475569; display: block; margin-bottom: 4px;">Recipient (Recruiter Email):</label>
-                        <input type="email" id="copilot-to-email" style="width: 100%; padding: 8px 12px; border: 1px solid #cbd5e1; border-radius: 6px; font-size: 0.85rem;" placeholder="recruiter@company.com">
-                    </div>
-
-                    <div style="margin-bottom: 10px;">
-                        <label style="font-size: 0.75rem; font-weight: 600; color: #475569; display: block; margin-bottom: 4px;">Subject Line:</label>
-                        <input type="text" id="copilot-subject" style="width: 100%; padding: 8px 12px; border: 1px solid #cbd5e1; border-radius: 6px; font-size: 0.85rem; font-weight: 600; color: #0f172a;" placeholder="Job Application...">
-                    </div>
-
-                    <div style="flex: 1; display: flex; flex-direction: column; margin-bottom: 12px;">
-                        <label style="font-size: 0.75rem; font-weight: 600; color: #475569; display: block; margin-bottom: 4px;">Email Body:</label>
-                        <textarea id="copilot-body" style="flex: 1; min-height: 220px; width: 100%; padding: 12px; border: 1px solid #cbd5e1; border-radius: 8px; font-size: 0.875rem; line-height: 1.6; font-family: inherit; color: #334155; resize: vertical;"></textarea>
-                    </div>
-
-                    <div style="display: flex; align-items: center; justify-content: space-between; padding-top: 12px; border-top: 1px solid #f1f5f9;">
-                        <div style="display: flex; align-items: center; gap: 6px; font-size: 0.8rem; color: #64748b;" id="copilot-resume-badge">
-                            <span>📎 Attached Resume:</span>
-                            <span id="copilot-resume-name" style="font-weight: 600; color: #0284c7;">Candidate_Resume.docx</span>
+                <!-- Right: Live Editable Draft Preview (fields scroll, footer stays) -->
+                <div style="display: flex; flex-direction: column; min-height: 0; background: #ffffff;">
+                    <div style="flex: 1; min-height: 0; overflow-y: auto; padding: 18px 20px 8px; display: flex; flex-direction: column;">
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+                            <span style="font-size: 0.75rem; font-weight: 700; text-transform: uppercase; color: #475569; letter-spacing: 0.05em;">Email Draft</span>
+                            <div style="display:flex; gap:8px; align-items:center;">
+                                <span id="copilot-changed-note" style="font-size: 0.75rem; color: #059669; font-weight: 600;"></span>
+                                <button type="button" id="btn-copilot-undo" onclick="undoCopilotChange()" disabled title="Go back to the version before the last AI change" style="font-size: 0.75rem; padding: 3px 10px; border: 1px solid #cbd5e1; border-radius: 6px; background: #ffffff; color: #334155; cursor: pointer;">↶ Undo</button>
+                                <span class="badge" style="background: #ecfdf5; color: #059669; border: 1px solid #a7f3d0; font-size: 0.75rem; padding: 2px 8px; border-radius: 9999px;">Directly Editable</span>
+                            </div>
                         </div>
-                        <div style="display: flex; gap: 8px;">
+                        <div style="margin-bottom: 10px;">
+                            <label style="font-size: 0.75rem; font-weight: 600; color: #475569; display: block; margin-bottom: 4px;">Recipient (Recruiter Email):</label>
+                            <input type="email" id="copilot-to-email" style="width: 100%; padding: 8px 12px; border: 1px solid #cbd5e1; border-radius: 6px; font-size: 0.85rem;" placeholder="recruiter@company.com">
+                        </div>
+                        <div style="margin-bottom: 10px;">
+                            <label style="font-size: 0.75rem; font-weight: 600; color: #475569; display: block; margin-bottom: 4px;">Subject Line:</label>
+                            <input type="text" id="copilot-subject" style="width: 100%; padding: 8px 12px; border: 1px solid #cbd5e1; border-radius: 6px; font-size: 0.85rem; font-weight: 600; color: #0f172a;" placeholder="Job Application...">
+                        </div>
+                        <div style="flex: 1; display: flex; flex-direction: column;">
+                            <label style="font-size: 0.75rem; font-weight: 600; color: #475569; display: block; margin-bottom: 4px;">Email Body:</label>
+                            <textarea id="copilot-body" style="flex: 1; min-height: 220px; width: 100%; padding: 12px; border: 1px solid #cbd5e1; border-radius: 8px; font-size: 0.875rem; line-height: 1.6; font-family: inherit; color: #334155; resize: vertical; transition: box-shadow 0.3s;"></textarea>
+                        </div>
+                    </div>
+                    <div style="padding: 10px 20px 14px; border-top: 1px solid #f1f5f9; background: #ffffff;">
+                        <div id="copilot-send-info" style="font-size: 0.78rem; color: #64748b; margin-bottom: 8px; line-height: 1.5;">
+                            <div id="copilot-resume-badge">📎 <span id="copilot-resume-name" style="font-weight: 600; color: #0284c7;"></span></div>
+                            <div id="copilot-bcc-info"></div>
+                        </div>
+                        <div style="display: flex; justify-content: flex-end; gap: 8px;">
                             <button type="button" class="btn btn-secondary btn-sm" onclick="closeAiCopilotModal()">Cancel</button>
-                            <button type="button" class="btn btn-primary btn-sm" id="btn-copilot-save-draft" onclick="submitCopilotDraftToGmail()" style="background: linear-gradient(135deg, #2563eb, #1d4ed8); font-weight: 700; padding: 8px 18px;">
-                                🚀 Save to Gmail Draft
-                            </button>
+                            <button type="button" class="btn btn-primary btn-sm" id="btn-copilot-save-draft" onclick="submitCopilotDraftToGmail()" style="background: linear-gradient(135deg, #2563eb, #1d4ed8); font-weight: 700; padding: 8px 18px;">🚀 Save to Gmail Draft</button>
                         </div>
                     </div>
                 </div>

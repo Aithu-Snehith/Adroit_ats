@@ -18,6 +18,7 @@ import resume_bot
 import cloud_align
 import resume_versions
 import application_tracker
+import outreach_ai
 import regions
 import work_backfill
 import threading
@@ -1217,132 +1218,6 @@ def api_auto_vendor_drafts():
                     "remaining_today": max(0, AUTO_VENDOR_DRAFTS_PER_DAY - used - len(created))})
 
 
-def personalize_pitch_with_prompt(cand, job, instruction: str, current_subject: str, current_body: str):
-    """
-    Intelligently adjusts pitch subject and body based on recruiter prompt and instructions.
-    Works dynamically with or without external API keys.
-    """
-    cand_name = cand.get("name", "Consultant")
-    cand_title = cand.get("title", "Technical Consultant")
-    cand_exp = cand.get("experience_years") or ""
-    # Only facts on file: no invented "H1B" / "$90/hr", and no US work-authorization or C2C wording
-    # for a consultant who isn't based in the US.
-    us_based = gmail_multi_manager._is_us_based(cand)
-    cand_visa = (cand.get("visa_status") or "").strip() if us_based else ""
-    cand_rate = (cand.get("target_rate") or "").strip()
-    cand_email = cand.get("gmail_account") or cand.get("email", "")
-    cand_phone = cand.get("phone", "")
-    job_title = job.get("title") or "Technical Position"
-    company = job.get("company") or "Hiring Team"
-    recruiter_name = job.get("recruiter_name") or "Hiring Team"
-    if not recruiter_name or recruiter_name.lower() in ["none", "null", "hiring manager"]:
-        recruiter_name = "Hiring Team"
-
-    inst_lower = instruction.lower().strip()
-
-    subject = current_subject or gmail_multi_manager.build_subject(cand, job)
-    body = current_body or ""
-
-    if not body:
-        body = gmail_multi_manager.generate_consultant_pitch(cand, job, "")
-
-    reply_parts = []
-
-    # Check for rate adjustment
-    import re
-    rate_match = re.search(r"\$\d+(?:\/hr)?(?:\s*c2c)?", inst_lower)
-    target_rate = rate_match.group(0).upper() if rate_match else cand_rate
-    exp_label = f"{cand_exp} Yrs Exp" if cand_exp else ""
-    meta = " | ".join(x for x in (exp_label, cand_visa) if x)
-    if cand_visa:
-        auth_line = f"I am authorized to work in the US ({cand_visa})" + (f" and open to C2C at {target_rate}" if target_rate else "") + "."
-    elif us_based and target_rate:
-        auth_line = f"My target rate is {target_rate}."
-    else:
-        auth_line = ""
-    if rate_match:
-        reply_parts.append(f"Updated rate to {target_rate}")
-
-    # Check for skills to highlight
-    skills_found = []
-    for sk in ["aws", "azure", "gcp", "python", "java", "spring boot", "microservices", "kafka", "kubernetes", "docker", "terraform", "react", "angular", "devops", "sql", "snowflake", "spark", "c2c"]:
-        if sk in inst_lower:
-            skills_found.append(sk.title() if len(sk) > 3 else sk.upper())
-
-    if skills_found:
-        reply_parts.append(f"Highlighted key skills: {', '.join(skills_found)}")
-
-    # Check for tone / length requests
-    is_short = any(w in inst_lower for w in ["short", "brief", "concise", "quick", "3 sentences", "4 sentences", "minimal"])
-    is_bullets = any(w in inst_lower for w in ["bullet", "bullets", "points", "structured", "bullet points"])
-    is_urgent = any(w in inst_lower for w in ["urgent", "immediate", "asap", "ready to join", "interview ready"])
-
-    if is_short:
-        reply_parts.append("Condensed draft into a punchy, high-impact note")
-    if is_bullets:
-        reply_parts.append("Formatted strengths into executive bullet points")
-    if is_urgent:
-        reply_parts.append("Emphasized immediate availability for C2C interviews")
-
-    if not reply_parts and instruction:
-        reply_parts.append(f"Tailored pitch with note: '{instruction}'")
-
-    # Generate personalized subject if requested
-    if "subject" in inst_lower:
-        if skills_found:
-            subject = f"Top {skills_found[0]} Consultant: {cand_name}" + (f" ({meta})" if meta else "") + f" for {job_title}"
-        elif is_urgent:
-            subject = f"Immediately Available: {cand_name}" + (f" ({exp_label})" if exp_label else "") + f" - {job_title}"
-
-    # Build personalized body
-    if is_short:
-        body = f"""Hi {recruiter_name},
-
-I am applying for the {job_title} role at {company}. {f"I bring {cand_exp} years of hands-on expertise" if cand_exp else "My hands-on expertise is"} in {', '.join(skills_found) if skills_found else cand.get('primary_skills') or 'this area'}.
-
-{(auth_line + " ") if auth_line else ""}I am available for a technical interview at your convenience. My resume is attached for your review.
-
-Looking forward to connecting!
-
-Best regards,
-{cand_name}
-{cand_phone} | {cand_email}"""
-    elif is_bullets:
-        body = f"""Hi {recruiter_name},
-
-I am writing to express my interest in the {job_title} opening at {company}.{f" I bring {cand_exp} years of hands-on experience." if cand_exp else ""}
-
-Key Highlights:
-• Core Expertise: {', '.join(skills_found) if skills_found else cand.get('primary_skills') or 'see resume'}{chr(10) + "• Work Authorization: " + cand_visa + (" (open for C2C at " + target_rate + ")" if target_rate else "") if cand_visa else ""}
-• Availability: open to interviews at your convenience
-{f'• Recruiter Note: {instruction}' if instruction and not skills_found else ''}
-
-My resume is attached for your review. Please let me know a convenient time for a brief discussion.
-
-Best regards,
-{cand_name}
-{cand_phone} | {cand_email}"""
-    else:
-        # Standard personalized refinement
-        skill_str = f"with deep hands-on expertise in {', '.join(skills_found)}" if skills_found else (f"specializing in {cand.get('primary_skills')}" if cand.get('primary_skills') else "")
-        body = f"""Hi {recruiter_name},
-
-I hope this note finds you well.
-
-I came across your opening for the {job_title} position at {company} and wanted to reach out directly.{f" I bring {cand_exp} years of experience {skill_str}." if cand_exp else (f" I am a professional {skill_str}." if skill_str else "")}
-
-{(auth_line + " ") if auth_line else ""}I am open to discussing how my background aligns with your project goals.
-
-Please find my updated resume attached. I look forward to hearing from you.
-
-Best regards,
-{cand_name}
-{cand_phone} | {cand_email}"""
-
-    reply_msg = f"Done! {', '.join(reply_parts) if reply_parts else 'Personalized the email draft based on your preferences.'} You can review the draft below and click 'Save to Gmail Draft' when ready."
-    return reply_msg, subject, body
-
-
 @app.route("/api/ai/personalize-draft", methods=["POST", "OPTIONS"])
 def api_ai_personalize_draft():
     if request.method == "OPTIONS":
@@ -1369,21 +1244,38 @@ def api_ai_personalize_draft():
     if not cand or not job:
         return jsonify({"error": "Candidate or Job not found"}), 404
 
-    reply_msg, new_subject, new_body = personalize_pitch_with_prompt(
-        cand, job, user_instruction, current_subject, current_body
-    )
+    to_email = (data.get("to_email") or job.get("recruiter_email") or "").strip()
+    out = {"success": True, "to_email": job.get("recruiter_email") or "", "consultant_name": cand.get("name"),
+           "job_title": job.get("title"), "company": job.get("company")}
+    if not user_instruction:
+        # Opening the window: the standard pitch, plus what will be attached / BCC'd when it's saved.
+        out.update(subject=current_subject or gmail_multi_manager.build_subject(cand, job),
+                   body=current_body or gmail_multi_manager.generate_consultant_pitch(cand, job, ""),
+                   rate_on_file=bool((cand.get("target_rate") or "").strip()),
+                   us_based=gmail_multi_manager._is_us_based(cand), **_draft_extras(user, cand, job, to_email))
+        return jsonify(out)
+    out.update(outreach_ai.edit_draft(cand, job, user_instruction, current_subject, current_body))
+    return jsonify(out)
 
-    return jsonify({
-        "success": True,
-        "reply": reply_msg,
-        "subject": new_subject,
-        "body": new_body,
-        "to_email": job.get("recruiter_email") or "",
-        "consultant_name": cand.get("name"),
-        "resume_path": cand.get("resume_path") or cand.get("resume_filename") or "",
-        "job_title": job.get("title"),
-        "company": job.get("company")
-    })
+
+def _draft_extras(user, cand, job, to_email):
+    """What Save to Gmail will attach and BCC - shown in the chat window before saving."""
+    chosen = _resume_version_for(user, cand["id"], None, job.get("id"))
+    if chosen:
+        attachment, kind = chosen[0], "JD-tailored version"
+    else:
+        found = models.find_resume_file(cand, persist=False)
+        attachment, kind = (found[0], "original resume") if found else ("", "")
+    bcc = []
+    conn = models.get_db_connection()
+    try:
+        bcc = [c["email"] for c in vendors.bcc_for_job(vendors.vendor_index(conn, user["id"]), job, to_email)]
+    except Exception as ex:
+        logger.warning(f"Vendor BCC preview failed: {ex}")
+    finally:
+        conn.close()
+    return {"attachment": attachment, "attachment_kind": kind, "bcc": bcc}
+
 
 # --- Pipeline APIs ---
 

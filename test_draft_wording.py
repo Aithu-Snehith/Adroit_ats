@@ -107,15 +107,23 @@ check("H1B" not in gm.generate_consultant_pitch(nov, job) and "H1B" not in gm.bu
 b2 = gm.generate_consultant_pitch(us, job, custom_notes="Emphasize Airflow please")
 check("Airflow and Spark" in b2 and "Emphasize" not in b2, f"emphasis note: {b2}")
 
-# ---- AI Copilot for the India consultant: no US authorization / C2C / invented rate
+# ---- AI Copilot for the India consultant: an AI that tries to add US authorization / C2C / an invented
+# rate is refused by the code guard - the draft stays as it was (no network: the AI is a stub)
+import json  # noqa: E402
+import outreach_ai  # noqa: E402
+import resume_bot  # noqa: E402
+
 cand = models.get_candidate_by_id(india_id)
 jobrow = {"title": "AI Vibe Coder", "company": "Test Client", "source": "Manual Paste", "description": RAW_JD}
-for instr in ("make it short", "use bullet points", "add more warmth"):
-    res = app_module.personalize_pitch_with_prompt(cand, jobrow, instr, "", "")
-    text = res.get("body", "") if isinstance(res, dict) else str(res)
-    subj = res.get("subject", "") if isinstance(res, dict) else ""
-    for bad in ("authorized to work in the US", "C2C", "$90", "H1B", "Relocation"):
-        check(bad not in text and bad not in subj, f"copilot '{instr}' must not contain {bad!r}: {subj} / {text[:300]}")
+base_subject, base_body = gm.build_subject(cand, jobrow), gm.generate_consultant_pitch(cand, jobrow, "")
+resume_bot.ai_configured = lambda: True
+resume_bot.gemini_configured = lambda: False
+for bad in ("I am authorized to work in the US.", "Open to C2C.", "My rate is $90/hr.", "H1B visa holder."):
+    resume_bot._generate = lambda c, t, sy, pr, want_json, max_tokens, _b=bad: (json.dumps(
+        {"subject": base_subject, "body": base_body + "\n" + _b, "changes": ["added"], "reply": "Done"}), False, "stub")
+    res = outreach_ai.edit_draft(cand, jobrow, "make it short", base_subject, base_body)
+    check(not res["applied"] and res["body"] == base_body and "didn't apply" in res["reply"],
+          f"copilot must refuse {bad!r}: {res['reply']}")
 
 if failures:
     print(f"FAIL: {len(failures)} check(s) failed:")

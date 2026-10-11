@@ -3206,8 +3206,10 @@ async function openAiCopilotModal(candId, jobId = null) {
     }
     const toEmailEl = document.getElementById('copilot-to-email');
     if (toEmailEl) toEmailEl.value = job.recruiter_email || '';
-    const resNameEl = document.getElementById('copilot-resume-name');
-    if (resNameEl) resNameEl.innerText = cand.resume_filename || 'Candidate_Resume.docx';
+    copilotUndoStack = [];
+    copilotSyncUndo();
+    const changedNote = document.getElementById('copilot-changed-note');
+    if (changedNote) changedNote.textContent = '';
 
     const msgContainer = document.getElementById('copilot-chat-messages');
     if (msgContainer) {
@@ -3215,7 +3217,7 @@ async function openAiCopilotModal(candId, jobId = null) {
             <div style="display: flex; gap: 10px; align-items: flex-start;">
                 <div style="width: 28px; height: 28px; border-radius: 50%; background: #eff6ff; color: #2563eb; display: flex; align-items: center; justify-content: center; font-size: 0.9rem; flex-shrink: 0;">🤖</div>
                 <div style="background: #f1f5f9; color: #1e293b; padding: 10px 14px; border-radius: 12px; font-size: 0.85rem; max-width: 88%; line-height: 1.5;">
-                    Hello! I am your <strong>Recruiter AI Outreach Copilot</strong>. I've prepared a baseline pitch for <strong>${escapeHtml(cand.name || 'Candidate')}</strong>. Tell me how you'd like to personalize it—e.g. highlight specific skills, adjust rate, change tone, or add immediate interview availability!
+                    Here is the standard email for <strong>${escapeHtml(cand.name || 'Candidate')}</strong>. Tell me what to change - tone, length, availability, skills to highlight. I only use facts saved on the consultant's profile; if something is missing I'll ask you instead of making it up.
                 </div>
             </div>
         `;
@@ -3240,6 +3242,12 @@ async function openAiCopilotModal(candId, jobId = null) {
             const bodyEl = document.getElementById('copilot-body');
             if (bodyEl) bodyEl.value = data.body || '';
             if (data.to_email && toEmailEl && !toEmailEl.value) toEmailEl.value = data.to_email;
+            const resName = document.getElementById('copilot-resume-name');
+            if (resName) resName.textContent = data.attachment ? `${data.attachment} (${data.attachment_kind})` : 'No resume on file - the email will go without an attachment';
+            const bccInfo = document.getElementById('copilot-bcc-info');
+            if (bccInfo) bccInfo.textContent = (data.bcc || []).length ? `BCC (your vendor contacts at this company): ${data.bcc.join(', ')}` : '';
+            const rateChip = document.getElementById('copilot-chip-rate');
+            if (rateChip) rateChip.style.display = data.rate_on_file ? '' : 'none';
         }
     } catch (e) {
         console.error('Error fetching baseline pitch:', e);
@@ -3248,6 +3256,23 @@ async function openAiCopilotModal(candId, jobId = null) {
     modal.style.display = 'flex';
     const input = document.getElementById('copilot-user-input');
     if (input) input.focus();
+}
+
+let copilotUndoStack = [];
+
+function copilotSyncUndo() {
+    const b = document.getElementById('btn-copilot-undo');
+    if (b) b.disabled = !copilotUndoStack.length;
+}
+
+function undoCopilotChange() {
+    const prev = copilotUndoStack.pop();
+    if (!prev) return;
+    document.getElementById('copilot-subject').value = prev.subject;
+    document.getElementById('copilot-body').value = prev.body;
+    const note = document.getElementById('copilot-changed-note');
+    if (note) note.textContent = '↶ Undone';
+    copilotSyncUndo();
 }
 
 function closeAiCopilotModal() {
@@ -3307,16 +3332,30 @@ async function sendCopilotInstruction() {
         const data = await res.json();
         if (data.success) {
             const subjEl = document.getElementById('copilot-subject');
-            if (subjEl) subjEl.value = data.subject || curSubject;
             const bodyEl = document.getElementById('copilot-body');
-            if (bodyEl) bodyEl.value = data.body || curBody;
-
+            const note = document.getElementById('copilot-changed-note');
+            if (data.applied) {
+                copilotUndoStack.push({ subject: curSubject, body: curBody });
+                copilotSyncUndo();
+                if (subjEl) subjEl.value = data.subject;
+                if (bodyEl) {
+                    bodyEl.value = data.body;
+                    bodyEl.style.boxShadow = '0 0 0 3px #bbf7d0';
+                    setTimeout(() => { bodyEl.style.boxShadow = ''; }, 1500);
+                }
+                if (note) note.textContent = `✓ ${data.lines_changed} line${data.lines_changed === 1 ? '' : 's'} changed`;
+            } else if (note) {
+                note.textContent = '';
+            }
+            const changes = (data.changes || []).length ? `<ul style="margin:6px 0 0 18px; padding:0;">${data.changes.map(c => `<li>${escapeHtml(c)}</li>`).join('')}</ul>` : '';
+            const needs = (data.needs_info || []).length ? `<div style="margin-top:6px; padding:6px 8px; border-radius:8px; background:#fffbeb; border:1px solid #fde68a; color:#92400e;">❓ ${data.needs_info.map(escapeHtml).join('<br>❓ ')}</div>` : '';
+            const tone = data.applied ? '#f1f5f9' : '#fef2f2';
             if (msgContainer) {
                 msgContainer.innerHTML += `
-                    <div style="display: flex; gap: 10px; align-items: flex-start;">
+                    <div class="copilot-reply" style="display: flex; gap: 10px; align-items: flex-start;">
                         <div style="width: 28px; height: 28px; border-radius: 50%; background: #eff6ff; color: #2563eb; display: flex; align-items: center; justify-content: center; font-size: 0.9rem; flex-shrink: 0;">🤖</div>
-                        <div style="background: #f1f5f9; color: #1e293b; padding: 10px 14px; border-radius: 12px; font-size: 0.85rem; max-width: 88%; line-height: 1.5;">
-                            ${escapeHtml(data.reply || 'Updated draft according to your instructions.')}
+                        <div style="background: ${tone}; color: #1e293b; padding: 10px 14px; border-radius: 12px; font-size: 0.85rem; max-width: 88%; line-height: 1.5;">
+                            ${escapeHtml(data.reply || '')}${changes}${needs}
                         </div>
                     </div>
                 `;
