@@ -3694,6 +3694,9 @@ function eduParams(page) {
         if (document.getElementById(id)?.checked) p.set(key, '1');
     }
     document.querySelectorAll('.edu-work-f').forEach(cb => { if (cb.checked) p.set(cb.getAttribute('data-key'), '1'); });
+    for (const key of ['colleges', 'years', 'states']) {
+        if (eduFacetSel[key].length) p.set(key, eduFacetSel[key].join(','));
+    }
     if (eduState.filter === 'P') {
         p.set('passout_year', document.getElementById('filter-student-bachelor-year')?.value || 'All');
     } else {
@@ -3733,6 +3736,7 @@ async function eduSearch(page) {
     }
     eduState.page = data.page; eduState.pages = data.pages; eduState.lastParams = params;
     eduRenderCounts(data.counts, data.total);
+    eduRenderFacets(data.facets);
     const other = eduState.filter === 'B' ? "an Indian Bachelor's" : "a US Master's";
     const py = document.getElementById('filter-student-bachelor-year')?.value || 'All';
     const what = isP ? `an Indian Bachelor's (${py === 'All' ? '2015 - 2023' : escapeHtml(py)}) and a US Master's`
@@ -3785,14 +3789,114 @@ function eduRenderCounts(c, shown) {
     const box = document.getElementById('edu-counter');
     if (!c || !box) return;
     const n = (v) => Number(v || 0).toLocaleString();
-    const ticked = document.querySelectorAll('.edu-work-f:checked').length;
-    box.innerHTML = `📊 <b>${n(c.total_scraped)}</b> LinkedIn profiles scraped in total (<b>${n(c.added_this_week)}</b> this week) · `
-        + `<b>${n(c.matching)}</b> match this search${ticked ? ` · <b>${n(shown)}</b> after the LinkedIn checkboxes` : ''}`
-        + (c.no_work_data ? `<div style="margin-top:3px; font-size:0.76rem; color:#475569;">${n(c.no_work_data)} of these were scraped before Open-to-work / job type was saved, so the LinkedIn checkboxes skip them until they are scraped again.</div>` : '');
-    box.style.display = 'block';
+    const set = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
+    set('edu-st-total', n(c.total_scraped)); set('edu-st-total-sub', 'all LinkedIn profiles saved');
+    set('edu-st-week', n(c.added_this_week)); set('edu-st-week-sub', 'last 7 days');
+    set('edu-st-match', n(c.matching)); set('edu-st-match-sub', 'with the filters below');
+    set('edu-st-otw', n(c.open_to_work)); set('edu-st-otw-sub', `in this search (${n(c.before_work)})`);
+    set('edu-st-contact', n(c.has_contact)); set('edu-st-contact-sub', 'email or phone saved');
+    box.textContent = c.no_work_data ? `${n(c.no_work_data)} of these were scraped before Open-to-work / job type was saved, so the LinkedIn checkboxes skip them until they are scraped again.` : '';
+    box.style.display = c.no_work_data ? 'block' : 'none';
     document.querySelectorAll('.edu-wc').forEach(s => {
         s.textContent = `(${n(c[s.getAttribute('data-key')])})`;
         s.style.cssText = 'color:#64748b; font-size:12px;';
+    });
+}
+
+// ---- "Filter saved profiles" checkbox dropdowns: College / Passout year / Location ----
+const eduFacetSel = { colleges: [], years: [], states: [] };
+const EDU_FACET_EMPTY = { colleges: 'Any college', years: 'Any year', states: 'Any location' };
+let eduFacetOpts = { colleges: [], years: [], states: [] };
+let eduFacetOpen = null;
+
+function eduFacetLabel(key, value) {
+    const o = (eduFacetOpts[key] || []).find(x => String(x.value) === String(value));
+    return o ? o.label : String(value);
+}
+
+function eduRenderFacetPanel(key) {
+    const panel = document.querySelector(`.edu-dd-panel[data-facet="${key}"]`);
+    if (!panel) return;
+    const q = (panel.querySelector('.edu-dd-search')?.value || '').trim().toLowerCase();
+    const opts = (eduFacetOpts[key] || []).filter(o => !q || o.label.toLowerCase().includes(q));
+    const chosen = new Set(eduFacetSel[key].map(String));
+    const search = key === 'colleges' ? `<input type="text" class="edu-dd-search" data-facet="${key}" placeholder="🔍 Type a college name..." value="${escapeHtml(q)}" style="width:100%; height:34px; box-sizing:border-box; border:1px solid #cbd5e1; border-radius:7px; padding:0 10px; font-size:13px; margin-bottom:8px;">` : '';
+    const list = opts.length ? opts.map(o => `
+        <label style="display:flex; align-items:center; gap:8px; padding:6px; font-size:13px; border-radius:6px; cursor:pointer;">
+            <input type="checkbox" class="edu-dd-opt" data-facet="${key}" value="${escapeHtml(String(o.value))}"${chosen.has(String(o.value)) ? ' checked' : ''} style="width:15px; height:15px;">
+            <span style="flex:1;">${escapeHtml(o.label)}</span><span style="color:#64748b; font-size:12px; font-weight:600;">${Number(o.count).toLocaleString()}</span>
+        </label>`).join('') : `<div style="padding:8px 6px; font-size:12px; color:#64748b;">${q ? 'No match.' : 'No saved profiles to pick from yet.'}</div>`;
+    const extra = key === 'states' && eduFacetOpts.location_not_listed
+        ? `<div style="font-size:11px; color:#94a3b8; padding:4px 6px;">${Number(eduFacetOpts.location_not_listed).toLocaleString()} profile(s) have no US state or country in their location.</div>` : '';
+    const keepFocus = document.activeElement && document.activeElement.classList.contains('edu-dd-search');
+    panel.innerHTML = `${search}<div style="max-height:260px; overflow-y:auto;">${list}</div>${extra}
+        <div style="display:flex; justify-content:space-between; border-top:1px solid #e2e8f0; margin-top:6px; padding-top:8px; font-size:12px;">
+            <button type="button" class="edu-dd-clear" data-facet="${key}" style="border:none; background:none; color:#2563eb; font-weight:700; cursor:pointer; padding:0;">Clear</button>
+            <span style="color:#64748b;">numbers = saved profiles</span></div>`;
+    if (keepFocus) { const s = panel.querySelector('.edu-dd-search'); if (s) { s.focus(); s.setSelectionRange(s.value.length, s.value.length); } }
+}
+
+function eduRenderFacets(f) {
+    if (f) eduFacetOpts = f;
+    for (const key of ['colleges', 'years', 'states']) {
+        const btn = document.querySelector(`.edu-dd-btn[data-facet="${key}"]`);
+        if (!btn) continue;
+        const sel = eduFacetSel[key];
+        const label = sel.length ? sel.map(v => eduFacetLabel(key, v)).join(', ') : EDU_FACET_EMPTY[key];
+        btn.querySelector('.edu-dd-label').innerHTML = escapeHtml(label) + (sel.length ? ` <span style="background:#2563eb; color:#ffffff; border-radius:999px; font-size:11px; padding:1px 7px;">${sel.length}</span>` : '');
+        btn.style.borderColor = sel.length ? '#2563eb' : '#cbd5e1';
+        if (eduFacetOpen === key) eduRenderFacetPanel(key);
+    }
+    const chips = document.getElementById('edu-facet-chips');
+    if (!chips) return;
+    const all = ['colleges', 'years', 'states'].flatMap(key => eduFacetSel[key].map(v => ({ key, v })));
+    chips.innerHTML = all.length ? `<span style="font-weight:700; color:#475569;">Selected:</span>` + all.map(({ key, v }) =>
+        `<span style="background:#eff6ff; color:#1d4ed8; border:1px solid #bfdbfe; border-radius:999px; padding:3px 6px 3px 10px; font-weight:600;">${escapeHtml(eduFacetLabel(key, v))}<button type="button" class="edu-chip-x" data-facet="${key}" data-value="${escapeHtml(String(v))}" title="Remove" style="border:none; background:none; color:#64748b; cursor:pointer; font-weight:800; margin-left:4px;">×</button></span>`).join('')
+        + `<button type="button" id="edu-facet-clear-all" style="border:none; background:none; color:#2563eb; font-weight:700; cursor:pointer;">Clear all</button>` : '';
+    chips.style.display = all.length ? 'flex' : 'none';
+}
+
+function eduFacetToggle(key) {
+    eduFacetOpen = eduFacetOpen === key ? null : key;
+    document.querySelectorAll('.edu-dd-panel').forEach(p => { p.style.display = p.getAttribute('data-facet') === eduFacetOpen ? 'block' : 'none'; });
+    if (eduFacetOpen) eduRenderFacetPanel(eduFacetOpen);
+}
+
+function eduFacetChanged() {
+    eduRenderFacets(null);
+    if (eduState.filter === 'P' || eduState.selected[eduState.filter]) eduSearch(1);
+}
+
+function initEduFacets() {
+    const wrap = document.getElementById('edu-facets');
+    if (!wrap) return;
+    wrap.addEventListener('click', (e) => {
+        const btn = e.target.closest('.edu-dd-btn');
+        if (btn) { eduFacetToggle(btn.getAttribute('data-facet')); return; }
+        const clr = e.target.closest('.edu-dd-clear');
+        if (clr) { eduFacetSel[clr.getAttribute('data-facet')] = []; eduFacetChanged(); }
+    });
+    wrap.addEventListener('change', (e) => {
+        if (!e.target.classList.contains('edu-dd-opt')) return;
+        const key = e.target.getAttribute('data-facet');
+        const v = key === 'years' ? parseInt(e.target.value) : e.target.value;
+        eduFacetSel[key] = e.target.checked ? [...eduFacetSel[key], v] : eduFacetSel[key].filter(x => String(x) !== String(v));
+        eduFacetChanged();
+    });
+    wrap.addEventListener('input', (e) => { if (e.target.classList.contains('edu-dd-search')) eduRenderFacetPanel(e.target.getAttribute('data-facet')); });
+    document.getElementById('edu-facet-chips')?.addEventListener('click', (e) => {
+        const x = e.target.closest('.edu-chip-x');
+        if (x) {
+            const key = x.getAttribute('data-facet');
+            eduFacetSel[key] = eduFacetSel[key].filter(v => String(v) !== x.getAttribute('data-value'));
+            eduFacetChanged();
+        } else if (e.target.closest('#edu-facet-clear-all')) {
+            for (const key of ['colleges', 'years', 'states']) eduFacetSel[key] = [];
+            eduFacetChanged();
+        }
+    });
+    document.addEventListener('click', (e) => {
+        if (eduFacetOpen && !e.target.closest('.edu-dd')) eduFacetToggle(eduFacetOpen);
     });
 }
 
@@ -4215,6 +4319,7 @@ function initSourcingTracker() {
     document.getElementById('trk-backdrop')?.addEventListener('click', trkClose);
     document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && trkCurrentId) trkClose(); });
     document.getElementById('edu-status-filter')?.addEventListener('change', trkRefreshTable);
+    initEduFacets();
     ['edu-f-mine', 'edu-f-followup', 'edu-f-contact', 'edu-f-otw', 'edu-f-contract', 'edu-f-fulltime', 'edu-f-remote', 'edu-f-hybrid', 'edu-f-onsite'].forEach(id =>
         document.getElementById(id)?.addEventListener('change', trkRefreshTable));
 }

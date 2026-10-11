@@ -93,7 +93,8 @@ check(names(wp_remote=1, wp_hybrid=1)[0] == ["Asha", "Bala"], "Remote + Hybrid")
 n, d = names(open_to_work=1)
 row = next(x for x in d["results"] if x["name"].startswith("Asha"))
 check(row["open_to_work"] == 1 and row["employment_type"] == "Contract" and row["workplace_type"] == "Remote", f"row badges data: {row}")
-check(d["counts"]["matching"] == 5 and d["total"] == 2, "counts stay for the whole search; total is after the checkboxes")
+check(d["counts"]["before_work"] == 5 and d["counts"]["matching"] == d["total"] == 2 and d["counts"]["open_to_work"] == 2,
+      f"checkbox counts stay for the whole search; matching = after the checkboxes: {d['counts']}")
 
 # ---- Postgres row shape: rows come back as models.DbRow (a dict keyed by column name, where the
 # SUM(...) columns share one name). Reading them by iteration crashed the live search.
@@ -107,10 +108,15 @@ class PgLikeCursor:
     def execute(self, *a):
         return self._cur.execute(*a)
 
-    def fetchone(self):
-        row = self._cur.fetchone()
+    def _wrap(self, row):
         names = ["sum" if d[0].lower().startswith("sum") else d[0].lower() for d in self._cur.description]
         return models.DbRow(names, tuple(row)) if row is not None else None
+
+    def fetchone(self):
+        return self._wrap(self._cur.fetchone())
+
+    def fetchall(self):
+        return [self._wrap(r) for r in self._cur.fetchall()]
 
 
 class PgLikeConn:
@@ -125,7 +131,8 @@ conn = models.get_db_connection()
 try:
     params = education_filters.parse_params({"filter": "P", "passout_year": "All"})
     pg = education_filters.counts(PgLikeConn(conn), params)
-    check(pg == d["counts"], f"counts identical with Postgres-style rows: {pg} vs {d['counts']}")
+    same = names()[1]["counts"]
+    check(pg == same, f"counts identical with Postgres-style rows: {pg} vs {same}")
 except Exception as ex:
     check(False, f"counts crashed with Postgres-style rows: {ex!r}")
 finally:

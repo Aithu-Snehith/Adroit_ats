@@ -314,6 +314,34 @@
                     <!-- One card: tabs (Passout Year | Filter A | Filter B), one row of controls, one shared results table.
                          All three read the team's saved LinkedIn profiles (free). Only "Search LinkedIn" is paid (Apify;
                          data source and depth fixed: 150 profiles); every profile it scans is saved for all three tabs. -->
+                    <!-- Always-visible numbers (filled by eduRenderCounts) -->
+                    <div id="edu-stats" style="display:grid; grid-template-columns:repeat(auto-fit, minmax(170px, 1fr)); gap:12px; margin-bottom:16px;">
+                        <div class="edu-stat" style="background:#eff6ff; border:1px solid #93c5fd; border-radius:12px; padding:12px 14px;">
+                            <div style="font-size:11px; font-weight:700; color:#64748b; text-transform:uppercase; letter-spacing:0.4px;">Total scraped</div>
+                            <div id="edu-st-total" style="font-size:26px; font-weight:800; color:#1d4ed8; margin-top:2px;">–</div>
+                            <div id="edu-st-total-sub" style="font-size:12px; color:#64748b;"></div>
+                        </div>
+                        <div class="edu-stat" style="background:#ffffff; border:1px solid #e2e8f0; border-radius:12px; padding:12px 14px;">
+                            <div style="font-size:11px; font-weight:700; color:#64748b; text-transform:uppercase; letter-spacing:0.4px;">Added this week</div>
+                            <div id="edu-st-week" style="font-size:26px; font-weight:800; color:#0f172a; margin-top:2px;">–</div>
+                            <div id="edu-st-week-sub" style="font-size:12px; color:#64748b;"></div>
+                        </div>
+                        <div class="edu-stat" style="background:#ffffff; border:1px solid #e2e8f0; border-radius:12px; padding:12px 14px;">
+                            <div style="font-size:11px; font-weight:700; color:#64748b; text-transform:uppercase; letter-spacing:0.4px;">Match this search</div>
+                            <div id="edu-st-match" style="font-size:26px; font-weight:800; color:#0f172a; margin-top:2px;">–</div>
+                            <div id="edu-st-match-sub" style="font-size:12px; color:#64748b;"></div>
+                        </div>
+                        <div class="edu-stat" style="background:#ffffff; border:1px solid #e2e8f0; border-radius:12px; padding:12px 14px;">
+                            <div style="font-size:11px; font-weight:700; color:#64748b; text-transform:uppercase; letter-spacing:0.4px;">Open to work</div>
+                            <div id="edu-st-otw" style="font-size:26px; font-weight:800; color:#0f172a; margin-top:2px;">–</div>
+                            <div id="edu-st-otw-sub" style="font-size:12px; color:#64748b;"></div>
+                        </div>
+                        <div class="edu-stat" style="background:#ffffff; border:1px solid #e2e8f0; border-radius:12px; padding:12px 14px;">
+                            <div style="font-size:11px; font-weight:700; color:#64748b; text-transform:uppercase; letter-spacing:0.4px;">Has contact info</div>
+                            <div id="edu-st-contact" style="font-size:26px; font-weight:800; color:#0f172a; margin-top:2px;">–</div>
+                            <div id="edu-st-contact-sub" style="font-size:12px; color:#64748b;"></div>
+                        </div>
+                    </div>
                     <div id="edu-panel" style="background:#ffffff; border:1px solid #e2e8f0; border-radius:14px; padding:20px 22px; margin-bottom:24px; box-shadow:var(--shadow-card);">
                         <div role="tablist" style="display:flex; gap:8px; margin-bottom:16px; flex-wrap:wrap;">
                             <button type="button" role="tab" class="edu-tab" data-filter="P" style="padding:8px 16px; border-radius:8px; border:1px solid #cbd5e1; background:#ffffff; color:#334155; font-weight:700; font-size:13px; cursor:pointer;">Passout Year</button>
@@ -376,6 +404,27 @@
                             </button>
                         </form>
 
+                        <!-- Filter SAVED profiles only (free; never changes the paid LinkedIn search) -->
+                        <div id="edu-facets" style="display:flex; gap:12px; flex-wrap:wrap; align-items:flex-end; margin-top:12px;">
+                            <div class="edu-dd" data-facet="colleges" style="position:relative;">
+                                <div style="font-size:11px; font-weight:700; color:#64748b; text-transform:uppercase; letter-spacing:0.4px; margin-bottom:4px;">College (Bachelor's)</div>
+                                <button type="button" class="edu-dd-btn" data-facet="colleges" style="height:38px; min-width:200px; max-width:280px; display:flex; align-items:center; justify-content:space-between; gap:8px; border:1px solid #cbd5e1; border-radius:8px; background:#ffffff; padding:0 12px; font-size:13px; font-weight:600; color:#0f172a; cursor:pointer;"><span class="edu-dd-label" style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">Any college</span><span>▾</span></button>
+                                <div class="edu-dd-panel" data-facet="colleges" style="display:none; position:absolute; top:62px; left:0; width:330px; max-width:calc(100vw - 32px); background:#ffffff; border:1px solid #cbd5e1; border-radius:10px; box-shadow:0 12px 30px rgba(15,23,42,0.18); padding:10px; z-index:30;"></div>
+                            </div>
+                            <div class="edu-dd" data-facet="years" style="position:relative;">
+                                <div style="font-size:11px; font-weight:700; color:#64748b; text-transform:uppercase; letter-spacing:0.4px; margin-bottom:4px;">Passout year</div>
+                                <button type="button" class="edu-dd-btn" data-facet="years" style="height:38px; min-width:200px; max-width:280px; display:flex; align-items:center; justify-content:space-between; gap:8px; border:1px solid #cbd5e1; border-radius:8px; background:#ffffff; padding:0 12px; font-size:13px; font-weight:600; color:#0f172a; cursor:pointer;"><span class="edu-dd-label" style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">Any year</span><span>▾</span></button>
+                                <div class="edu-dd-panel" data-facet="years" style="display:none; position:absolute; top:62px; left:0; width:330px; max-width:calc(100vw - 32px); background:#ffffff; border:1px solid #cbd5e1; border-radius:10px; box-shadow:0 12px 30px rgba(15,23,42,0.18); padding:10px; z-index:30;"></div>
+                            </div>
+                            <div class="edu-dd" data-facet="states" style="position:relative;">
+                                <div style="font-size:11px; font-weight:700; color:#64748b; text-transform:uppercase; letter-spacing:0.4px; margin-bottom:4px;">Location</div>
+                                <button type="button" class="edu-dd-btn" data-facet="states" style="height:38px; min-width:200px; max-width:280px; display:flex; align-items:center; justify-content:space-between; gap:8px; border:1px solid #cbd5e1; border-radius:8px; background:#ffffff; padding:0 12px; font-size:13px; font-weight:600; color:#0f172a; cursor:pointer;"><span class="edu-dd-label" style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">Any location</span><span>▾</span></button>
+                                <div class="edu-dd-panel" data-facet="states" style="display:none; position:absolute; top:62px; left:0; width:330px; max-width:calc(100vw - 32px); background:#ffffff; border:1px solid #cbd5e1; border-radius:10px; box-shadow:0 12px 30px rgba(15,23,42,0.18); padding:10px; z-index:30;"></div>
+                            </div>
+                            <span style="font-size:11px; color:#94a3b8; padding-bottom:10px;">Filters saved profiles only - free</span>
+                        </div>
+                        <div id="edu-facet-chips" style="display:none; margin-top:10px; gap:8px; flex-wrap:wrap; align-items:center; font-size:12px;"></div>
+
                         <div id="edu-quick-filters" style="display:flex; gap:16px; flex-wrap:wrap; margin-top:10px; font-size:13px; color:#334155;">
                             <label style="display:flex; align-items:center; gap:6px; cursor:pointer;"><input type="checkbox" id="edu-f-mine"> My candidates</label>
                             <label style="display:flex; align-items:center; gap:6px; cursor:pointer;"><input type="checkbox" id="edu-f-followup"> Follow-up due</label>
@@ -392,7 +441,7 @@
                             <label style="display:flex; align-items:center; gap:6px; cursor:pointer;"><input type="checkbox" class="edu-work-f" id="edu-f-hybrid" data-key="wp_hybrid"> Hybrid <span class="edu-wc" data-key="wp_hybrid"></span></label>
                             <label style="display:flex; align-items:center; gap:6px; cursor:pointer;"><input type="checkbox" class="edu-work-f" id="edu-f-onsite" data-key="wp_onsite"> On-site <span class="edu-wc" data-key="wp_onsite"></span></label>
                         </div>
-                        <div id="edu-counter" style="display:none; margin-top:10px; padding:8px 12px; border-radius:8px; background:#eff6ff; border:1px solid #bfdbfe; color:#1e3a8a; font-size:0.82rem;"></div>
+                        <div id="edu-counter" style="display:none; margin-top:8px; font-size:0.76rem; color:#475569;"></div>
                         <div id="students-search-status" style="display:none; margin-top:12px; padding:8px 12px; border-radius:8px; background:#f8fafc; border:1px solid #e2e8f0; color:#334155; font-size:0.8rem; line-height:1.5;"></div>
                         <div id="edu-status" style="margin-top:14px; font-size:0.85rem; color:#334155;"></div>
                         <div id="edu-results-wrap" style="display:none; margin-top:10px; border:1px solid #e2e8f0; border-radius:10px; overflow-x:auto;">
@@ -1322,7 +1371,7 @@
     <aside id="trk-drawer" aria-label="Candidate tracking card" style="position:fixed; top:0; right:0; height:100vh; width:min(480px, 100vw); background:#ffffff; box-shadow:-12px 0 30px rgba(15,23,42,0.18); z-index:1201; transform:translateX(105%); transition:transform 0.2s ease; overflow-y:auto; box-sizing:border-box;"></aside>
     <script>window.CURRENT_USER = {{ {'id': user.id, 'admin': ('Admin' in (user.role or ''))} | tojson }};
         window.VIEW_REGION = {{ view_region | tojson }};</script>
-    <script src="/static/js/app.js?v=5.66.0"></script>
+    <script src="/static/js/app.js?v=5.67.0"></script>
 
     <!-- Recruiter Management Inline Fallback: app.js defines all of these with toast-based
          feedback and no page reloads. These only fire if app.js somehow failed to load -

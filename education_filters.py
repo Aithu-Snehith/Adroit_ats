@@ -43,6 +43,22 @@ MAX_EXPORT_ROWS = 10000
 EMPLOYMENT = {"emp_contract": ("Contract", "Freelance"), "emp_fulltime": ("Full-time",)}
 WORKPLACE = {"wp_remote": ("Remote",), "wp_hybrid": ("Hybrid",), "wp_onsite": ("On-site",)}
 WORK_FLAGS = ("open_to_work", *EMPLOYMENT, *WORKPLACE)
+# "Filter saved profiles" checkbox dropdowns: Indian Bachelor's college, its passout year, and the
+# location (US state, or "India"). They only narrow profiles already saved - never the paid search.
+US_STATES = ["Alabama", "Alaska", "Arizona", "Arkansas", "California", "Colorado", "Connecticut", "Delaware",
+             "District of Columbia", "Florida", "Georgia", "Hawaii", "Idaho", "Illinois", "Indiana", "Iowa", "Kansas",
+             "Kentucky", "Louisiana", "Maine", "Maryland", "Massachusetts", "Michigan", "Minnesota", "Mississippi",
+             "Missouri", "Montana", "Nebraska", "Nevada", "New Hampshire", "New Jersey", "New Mexico", "New York",
+             "North Carolina", "North Dakota", "Ohio", "Oklahoma", "Oregon", "Pennsylvania", "Rhode Island",
+             "South Carolina", "South Dakota", "Tennessee", "Texas", "Utah", "Vermont", "Virginia", "Washington",
+             "West Virginia", "Wisconsin", "Wyoming"]
+_STATE_ABBR = dict(zip(["AL", "AK", "AZ", "AR", "CA", "CO", "CT", "DE", "DC", "FL", "GA", "HI", "ID", "IL", "IN", "IA",
+                        "KS", "KY", "LA", "ME", "MD", "MA", "MI", "MN", "MS", "MO", "MT", "NE", "NV", "NH", "NJ", "NM",
+                        "NY", "NC", "ND", "OH", "OK", "OR", "PA", "RI", "SC", "SD", "TN", "TX", "UT", "VT", "VA", "WA",
+                        "WV", "WI", "WY"], US_STATES))
+_STATE_BY_LOWER = {st.lower(): st for st in US_STATES}
+LOCATION_OPTIONS = US_STATES + ["India"]
+MAX_FACET_VALUES = 50
 
 
 class FilterError(ValueError):
@@ -98,7 +114,36 @@ def parse_params(args: Dict) -> Dict:
             "location": str(args.get("location") or "").strip(), "keyword": str(args.get("keyword") or "").strip(),
             "status": status, "mine": flag("mine"), "followup_due": flag("followup_due"),
             "has_contact": flag("has_contact"), "page": page, "page_size": page_size,
-            **{k: flag(k) for k in WORK_FLAGS}}
+            **{k: flag(k) for k in WORK_FLAGS}, **_facet_params(args)}
+
+
+def _csv(args: Dict, key: str) -> List[str]:
+    vals = [v.strip() for v in str(args.get(key) or "").split(",") if v.strip()]
+    if len(vals) > MAX_FACET_VALUES:
+        raise FilterError(f"Too many {key} selected.")
+    return list(dict.fromkeys(vals))
+
+
+def _facet_params(args: Dict) -> Dict:
+    years = [_year(v) for v in _csv(args, "years")]
+    states = _csv(args, "states")
+    bad = [v for v in states if v not in LOCATION_OPTIONS]
+    if bad:
+        raise FilterError(f"Unknown location: {bad[0]}")
+    return {"colleges": _csv(args, "colleges"), "years": years, "states": states}
+
+
+def state_of(location: str) -> str:
+    """'Dallas, Texas, United States' -> 'Texas'; 'Austin, TX' -> 'Texas'; 'Hyderabad, Telangana, India'
+    -> 'India'; '' when no US state or India can be read (e.g. 'Dallas-Fort Worth Metroplex')."""
+    parts = [x.strip() for x in (location or "").split(",") if x.strip()]
+    for part in reversed(parts):   # City, State, Country - the state is nearer the end ('Washington, DC')
+        st = _STATE_BY_LOWER.get(part.lower()) or (_STATE_ABBR.get(part.upper()) if len(part) == 2 else None)
+        if st:
+            return st
+    if any(part.lower() == "india" for part in parts):
+        return "India"
+    return ""
 
 
 def member_ids(institution_id: Optional[str]) -> Optional[List[str]]:
@@ -124,23 +169,7 @@ def _like(text: str) -> str:
     return "%" + text.lower().replace("\\", "").replace("%", "").replace("_", "") + "%"
 
 
-def _in_list(column: str, values) -> str:
-    return f"LOWER(COALESCE({column}, '')) IN ({', '.join(['?'] * len(values))})"
-
-
-def _work_clauses(p: Dict):
-    clauses, params = [], []
-    if p.get("open_to_work"):
-        clauses.append("p.open_to_work = 1")
-    for group, column in ((EMPLOYMENT, "p.current_employment_type"), (WORKPLACE, "p.current_workplace_type")):
-        values = [v.lower() for k, vals in group.items() if p.get(k) for v in vals]
-        if values:
-            clauses.append(_in_list(column, values))
-            params += values
-    return clauses, params
-
-
-def _where(p: Dict, work: bool = True):
+def _where(p: Dict):
     spec = FILTERS[p["filter"]]
     members = member_ids(p["institution_id"])
     clauses = ["""EXISTS (SELECT 1 FROM profile_education c WHERE c.profile_id = p.id AND c.degree_level = ?
@@ -197,38 +226,135 @@ def _where(p: Dict, work: bool = True):
         clauses.append("(LOWER(COALESCE(p.headline, '')) LIKE ? OR LOWER(COALESCE(p.current_title, '')) LIKE ? "
                        "OR LOWER(COALESCE(p.current_company, '')) LIKE ?)")
         params += [_like(p["keyword"])] * 3
-    if work:
-        wc, wp = _work_clauses(p)
-        clauses += wc
-        params += wp
     return " AND ".join(clauses), params
 
 
-def counts(conn, p: Dict) -> Dict:
-    """How many profiles were scraped in total / this week, and - for the current filter WITHOUT the
-    work checkboxes - how many are open to work, contract, full-time, remote, hybrid, on-site, and how
-    many have no work data yet (scraped before it was kept)."""
+def _base(conn, p: Dict) -> List[Dict]:
+    """Every saved profile the tab + text filters match (newest first), with what the checkboxes and
+    dropdowns need: location, work fields, contact flags and its Indian Bachelor's entries."""
+    where, params = _where(p)
+    cur = conn.cursor()
+    cur.execute(f"""SELECT p.id, p.location, p.current_location, p.verified_bachelor_year, p.contact_email, p.contact_phone,
+                           p.open_to_work, p.current_employment_type, p.current_workplace_type
+                    FROM linkedin_profiles p WHERE {where} ORDER BY p.captured_at DESC, p.id DESC""", params)
+    rows = []
+    for r in cur.fetchall():
+        rows.append({"id": r["id"], "state": state_of(r["current_location"] or r["location"] or ""),
+                     "vby": r["verified_bachelor_year"], "contact": bool(r["contact_email"] or r["contact_phone"]),
+                     "otw": r["open_to_work"], "emp": (r["current_employment_type"] or "").lower(),
+                     "wp": (r["current_workplace_type"] or "").lower(), "edu": []})
+    by_id = {r["id"]: r for r in rows}
+    ids = list(by_id)
+    for i in range(0, len(ids), 500):
+        chunk = ids[i:i + 500]
+        cur.execute(f"""SELECT profile_id, institution_canonical_id, end_year FROM profile_education
+                        WHERE degree_level = 'Bachelors' AND country = 'India'
+                        AND profile_id IN ({", ".join(["?"] * len(chunk))})""", chunk)
+        for e in cur.fetchall():
+            by_id[e["profile_id"]]["edu"].append((e["institution_canonical_id"], e["end_year"]))
+    return rows
+
+
+def _work_ok(r: Dict, p: Dict) -> bool:
+    if p.get("open_to_work") and r["otw"] != 1:
+        return False
+    for group, key in ((EMPLOYMENT, "emp"), (WORKPLACE, "wp")):
+        wanted = {v.lower() for k, vals in group.items() if p.get(k) for v in vals}
+        if wanted and r[key] not in wanted:
+            return False
+    return True
+
+
+def _facet_ok(r: Dict, p: Dict, skip: str = "") -> bool:
+    colleges = set(p.get("colleges") or []) if skip != "colleges" else set()
+    years = set(p.get("years") or []) if skip != "years" else set()
+    states = set(p.get("states") or []) if skip != "states" else set()
+    if states and r["state"] not in states:
+        return False
+    if colleges and years:          # the same degree must be from a chosen college AND a chosen year
+        return any(c in colleges and y in years for c, y in r["edu"])
+    if colleges:
+        return any(c in colleges for c, _ in r["edu"])
+    if years:
+        return any(y in years for _, y in r["edu"]) or r["vby"] in years
+    return True
+
+
+def _facets(conn, p: Dict, rows: List[Dict]) -> Dict:
+    """Options for each dropdown with how many profiles each would give (the other dropdowns and the
+    checkboxes applied, not its own - so you can see what ticking one more adds)."""
+    base = [r for r in rows if _work_ok(r, p)]
+    colleges, years, states = {}, {}, {}
+    chosen_c, chosen_y = set(p.get("colleges") or []), set(p.get("years") or [])
+    for r in base:
+        if _facet_ok(r, p, skip="colleges"):
+            for c in {c for c, y in r["edu"] if c and (not chosen_y or y in chosen_y)}:
+                colleges[c] = colleges.get(c, 0) + 1
+        if _facet_ok(r, p, skip="years"):
+            ys = {y for c, y in r["edu"] if y and (not chosen_c or c in chosen_c)}
+            if not chosen_c and r["vby"]:
+                ys.add(r["vby"])
+            for y in ys:
+                years[y] = years.get(y, 0) + 1
+        if _facet_ok(r, p, skip="states") and r["state"]:
+            states[r["state"]] = states.get(r["state"], 0) + 1
+    for c in chosen_c:
+        colleges.setdefault(c, 0)
+    names = {}
+    if colleges:
+        cur = conn.cursor()
+        ids = list(colleges)
+        cur.execute(f"""SELECT canonical_id, MIN(canonical_name) AS name FROM institution_aliases
+                        WHERE canonical_id IN ({", ".join(["?"] * len(ids))}) GROUP BY canonical_id""", ids)
+        names = {r["canonical_id"]: r["name"] for r in cur.fetchall()}
+    for y in chosen_y:
+        years.setdefault(y, 0)
+    for st in p.get("states") or []:
+        states.setdefault(st, 0)
+    return {
+        "colleges": sorted(({"value": c, "label": names.get(c) or c, "count": n} for c, n in colleges.items()),
+                           key=lambda o: (-o["count"], o["label"].lower())),
+        "years": [{"value": y, "label": str(y), "count": n} for y, n in sorted(years.items(), reverse=True)],
+        "states": sorted(({"value": st, "label": st, "count": n} for st, n in states.items()),
+                         key=lambda o: (-o["count"], o["label"])),
+        "location_not_listed": sum(1 for r in base if not r["state"] and _facet_ok(r, p, skip="states")),
+    }
+
+
+def _matching(conn, p: Dict):
+    """(rows the whole search matches, newest first; counts; dropdown options)."""
+    rows = _base(conn, p)
+    final = [r for r in rows if _work_ok(r, p) and _facet_ok(r, p)]
+    before_work = [r for r in rows if _facet_ok(r, p)]
     cur = conn.cursor()
     cur.execute("SELECT COUNT(*) FROM linkedin_profiles")
     total_all = int(cur.fetchone()[0])
     week_ago = date.fromordinal(date.today().toordinal() - 7).isoformat()
     cur.execute("SELECT COUNT(*) FROM linkedin_profiles WHERE captured_at >= ?", (week_ago,))
     week = int(cur.fetchone()[0])
-    where, params = _where(p, work=False)
-    sums = ["SUM(CASE WHEN p.open_to_work = 1 THEN 1 ELSE 0 END)"]
-    sparams = []
-    for group, column in ((EMPLOYMENT, "p.current_employment_type"), (WORKPLACE, "p.current_workplace_type")):
-        for vals in group.values():
-            sums.append(f"SUM(CASE WHEN {_in_list(column, vals)} THEN 1 ELSE 0 END)")
-            sparams += [v.lower() for v in vals]
-    sums.append("SUM(CASE WHEN p.open_to_work IS NULL AND p.current_employment_type IS NULL THEN 1 ELSE 0 END)")
-    sums.append("COUNT(*)")
-    cur.execute(f"SELECT {', '.join(sums)} FROM linkedin_profiles p WHERE {where}", sparams + params)
-    got = cur.fetchone()
-    # by position: on Postgres a row is a dict keyed by column name (and the SUM columns share one name)
-    row = [int(got[i] or 0) for i in range(len(sums))]
-    keys = list(WORK_FLAGS) + ["no_work_data", "matching"]
-    return {"total_scraped": total_all, "added_this_week": week, **dict(zip(keys, row))}
+    c = {"total_scraped": total_all, "added_this_week": week, "matching": len(final),
+         "before_work": len(before_work), "has_contact": sum(1 for r in final if r["contact"]),
+         "no_work_data": sum(1 for r in before_work if r["otw"] is None and not r["emp"])}
+    # each LinkedIn checkbox's count: what ticking it would give, with the others in its group unticked
+    for key in WORK_FLAGS:
+        alone = dict(p, **{k: False for k in WORK_FLAGS})
+        alone[key] = True
+        c[key] = sum(1 for r in before_work if _work_ok(r, alone))
+    return final, c, _facets(conn, p, rows)
+
+
+def counts(conn, p: Dict) -> Dict:
+    return _matching(conn, p)[1]
+
+
+def _rows_by_ids(conn, ids: List[int]) -> List[Dict]:
+    out = {}
+    cur = conn.cursor()
+    for i in range(0, len(ids), 500):
+        chunk = ids[i:i + 500]
+        cur.execute(f"{_SELECT} WHERE p.id IN ({', '.join(['?'] * len(chunk))})", chunk)
+        out.update({r["id"]: dict(r) for r in cur.fetchall()})
+    return [out[i] for i in ids if i in out]
 
 
 def _fmt_entries(entries: List[Dict], with_degree: bool) -> str:
@@ -345,27 +471,21 @@ _SELECT = """SELECT p.id, p.name, p.headline, p.current_title, p.current_company
 
 
 def search(conn, p: Dict) -> Dict:
-    where, params = _where(p)
-    cur = conn.cursor()
-    cur.execute(f"SELECT COUNT(*) FROM linkedin_profiles p WHERE {where}", params)
-    total = int(cur.fetchone()[0])
+    final, c, facets = _matching(conn, p)
+    total = len(final)
     offset = (p["page"] - 1) * p["page_size"]
-    cur.execute(f"{_SELECT} WHERE {where} ORDER BY p.captured_at DESC, p.id DESC LIMIT ? OFFSET ?",
-                params + [p["page_size"], offset])
-    rows = [dict(r) for r in cur.fetchall()]
+    rows = _rows_by_ids(conn, [r["id"] for r in final[offset:offset + p["page_size"]]])
     results = _decorate(conn, p, rows)
     for r in results:   # the table only needs to know a contact exists; the card shows the details
         r.pop("contact_email", None)
         r.pop("contact_phone", None)
     return {"total": total, "page": p["page"], "page_size": p["page_size"],
-            "pages": max(1, -(-total // p["page_size"])), "results": results, "counts": counts(conn, p)}
+            "pages": max(1, -(-total // p["page_size"])), "results": results, "counts": c, "facets": facets}
 
 
 def export_rows(conn, p: Dict) -> List[Dict]:
-    where, params = _where(p)
-    cur = conn.cursor()
-    cur.execute(f"{_SELECT} WHERE {where} ORDER BY p.captured_at DESC, p.id DESC LIMIT ?", params + [MAX_EXPORT_ROWS])
-    return _decorate(conn, p, [dict(r) for r in cur.fetchall()])
+    final = _matching(conn, p)[0][:MAX_EXPORT_ROWS]
+    return _decorate(conn, p, _rows_by_ids(conn, [r["id"] for r in final]))
 
 
 EXPORT_COLUMNS = [
