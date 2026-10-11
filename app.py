@@ -19,6 +19,7 @@ import cloud_align
 import resume_versions
 import application_tracker
 import outreach_ai
+import application_brief
 import regions
 import reply_inbox
 import inbox_requirements
@@ -1250,19 +1251,34 @@ def api_ai_personalize_draft():
     out = {"success": True, "to_email": job.get("recruiter_email") or "", "consultant_name": cand.get("name"),
            "job_title": job.get("title"), "company": job.get("company")}
     if not user_instruction:
-        # Opening the window: the standard pitch, plus what will be attached / BCC'd when it's saved.
-        out.update(subject=current_subject or gmail_multi_manager.build_subject(cand, job),
-                   body=current_body or gmail_multi_manager.generate_consultant_pitch(cand, job, ""),
+        # Opening the window. With a full job description the email follows the JD's application
+        # instructions (application_brief: where to send, subject, its questions answered from the
+        # resume that will be attached); otherwise the standard pitch. Plus what will be attached / BCC'd.
+        version_id = _int_or_none(data.get("optimized_resume_id"))
+        jd = str(data.get("jd_text") or job.get("full_description") or "").strip()
+        if not jd and len((job.get("description") or "").strip()) >= 400:
+            jd = job["description"].strip()
+        checklist, needs = [], []
+        if current_body:
+            subject, body = current_subject or gmail_multi_manager.build_subject(cand, job), current_body
+        elif jd:
+            b = application_brief.build(cand, job, jd, version_id=version_id, default_to=to_email)
+            subject, body, checklist, needs = b["subject"], b["body"], b["checklist"], b["needs_input"]
+            if b["to"]:
+                out["to_email"] = to_email = b["to"]
+        else:
+            subject, body = gmail_multi_manager.build_subject(cand, job), gmail_multi_manager.generate_consultant_pitch(cand, job, "")
+        out.update(subject=subject, body=body, checklist=checklist, needs_input=needs,
                    rate_on_file=bool((cand.get("target_rate") or "").strip()),
-                   us_based=gmail_multi_manager._is_us_based(cand), **_draft_extras(user, cand, job, to_email))
+                   us_based=gmail_multi_manager._is_us_based(cand), **_draft_extras(user, cand, job, to_email, version_id))
         return jsonify(out)
     out.update(outreach_ai.edit_draft(cand, job, user_instruction, current_subject, current_body))
     return jsonify(out)
 
 
-def _draft_extras(user, cand, job, to_email):
+def _draft_extras(user, cand, job, to_email, version_id=None):
     """What Save to Gmail will attach and BCC - shown in the chat window before saving."""
-    chosen = _resume_version_for(user, cand["id"], None, job.get("id"))
+    chosen = _resume_version_for(user, cand["id"], version_id, job.get("id"))
     if chosen:
         attachment, kind = chosen[0], "JD-tailored version"
     else:

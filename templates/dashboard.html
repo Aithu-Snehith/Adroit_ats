@@ -1279,7 +1279,7 @@
                 <div style="display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin-bottom:8px;">
                     <select id="rq-consultant" class="form-control" style="max-width:240px;"></select>
                     <select id="rq-status" class="form-control" style="max-width:220px;">
-                        <option value="">All</option><option value="drafted" selected>Drafts created</option><option value="low_match">Low match</option>
+                        <option value="">All</option><option value="drafted" selected>Drafts created</option><option value="drafted_input">Drafts that need your input</option><option value="low_match">Low match</option>
                         <option value="not_requirement">Not a requirement</option><option value="filtered">Skipped</option><option value="error">Problems</option>
                     </select>
                     <button type="button" class="btn btn-primary btn-sm" id="rq-scan">📥 Scan Gmail now</button>
@@ -1431,7 +1431,7 @@
     <aside id="trk-drawer" aria-label="Candidate tracking card" style="position:fixed; top:0; right:0; height:100vh; width:min(480px, 100vw); background:#ffffff; box-shadow:-12px 0 30px rgba(15,23,42,0.18); z-index:1201; transform:translateX(105%); transition:transform 0.2s ease; overflow-y:auto; box-sizing:border-box;"></aside>
     <script>window.CURRENT_USER = {{ {'id': user.id, 'admin': ('Admin' in (user.role or ''))} | tojson }};
         window.VIEW_REGION = {{ view_region | tojson }};</script>
-    <script src="/static/js/app.js?v=5.72.0"></script>
+    <script src="/static/js/app.js?v=5.73.0"></script>
 
     <!-- Recruiter Management Inline Fallback: app.js defines all of these with toast-based
          feedback and no page reloads. These only fire if app.js somehow failed to load -
@@ -1598,6 +1598,7 @@
                         <button type="button" class="btn-prompt-chip" onclick="applyCopilotQuickPrompt('Highlight the consultant\'s skills that best match this job description')">🎯 Top skills for this JD</button>
                         <button type="button" class="btn-prompt-chip" id="copilot-chip-rate" style="display:none;" onclick="applyCopilotQuickPrompt('Mention the consultant\'s rate on file')">💼 Add rate on file</button>
                         <button type="button" class="btn-prompt-chip" onclick="applyCopilotQuickPrompt('Suggest a better subject line')">✉️ Suggest subject</button>
+                        <button type="button" class="btn-prompt-chip" onclick="applyCopilotQuickPrompt('Answer what the job description asks applicants to write, using real projects from the resume')">📝 Answer the JD's questions</button>
                     </div>
 
                     <!-- Chat Input Box -->
@@ -1618,6 +1619,7 @@
                                 <span class="badge" style="background: #ecfdf5; color: #059669; border: 1px solid #a7f3d0; font-size: 0.75rem; padding: 2px 8px; border-radius: 9999px;">Directly Editable</span>
                             </div>
                         </div>
+                        <div id="copilot-checklist" style="display:none; margin-bottom: 10px; padding: 8px 10px; border-radius: 8px; background: #f8fafc; border: 1px solid #e2e8f0; font-size: 0.8rem; line-height: 1.6;"></div>
                         <div style="margin-bottom: 10px;">
                             <label style="font-size: 0.75rem; font-weight: 600; color: #475569; display: block; margin-bottom: 4px;">Recipient (Recruiter Email):</label>
                             <input type="email" id="copilot-to-email" style="width: 100%; padding: 8px 12px; border: 1px solid #cbd5e1; border-radius: 6px; font-size: 0.85rem;" placeholder="recruiter@company.com">

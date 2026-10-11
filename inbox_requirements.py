@@ -33,7 +33,7 @@ MIN_MATCH = 60
 SCAN_QUERY = '"category:primary newer_than:2d"'
 MAX_PER_SCAN = 30
 MAX_ATTEMPTS = 3
-STATUS_LABELS = {"drafted": "Draft created", "low_match": "Low match - no draft", "not_requirement": "Not a requirement",
+STATUS_LABELS = {"drafted": "Draft created", "drafted_input": "Draft created - needs your input", "low_match": "Low match - no draft", "not_requirement": "Not a requirement",
                  "filtered": "Skipped (not a job email)", "error": "Problem - will retry", "checking": "Checking..."}
 
 _SKIP_SENDER = re.compile(r"(no-?reply|do-?not-?reply|notifications?|mailer-daemon|alerts?|jobalerts?|newsletter|updates?)@", re.I)
@@ -231,15 +231,25 @@ def _handle(conn, rid: int, cand: Dict, p: Dict, full_text: str, user_id: Option
         fname = resume_versions.make_filename(cand.get("name") or "Consultant", skill, resume_versions.taken_names(cand["id"]))
         version_id = resume_versions.save(cand["id"], job_id, fname, tailored, skill, "", jd[:300], user_id or cand.get("assigned_user_id") or 1)
         attachment = (fname, tailored)
+    import application_brief
+    their_subject = p["subject"] if p["subject"].lower().startswith("re:") else f"Re: {p['subject']}"
+    plan = application_brief.build(cand, models.get_job_by_id(job_id) or {}, jd, version_id=version_id, reply=True,
+                                   skills=res.get("mandatory_matched_skills") or [], default_to=data["recruiter_email"],
+                                   default_subject=their_subject)
+    # Answer in their thread - unless the JD says to apply to a different address (then it's a new email).
+    in_thread = plan["to"].lower() in (data["recruiter_email"], p["from_email"], p.get("reply_to") or "")
     out = gmail_multi_manager.create_candidate_draft(
-        cand["id"], job_id, custom_to_email=data["recruiter_email"], attachment=attachment,
-        acting_user_id=user_id or cand.get("assigned_user_id"), resume_version_id=version_id,
-        reply_to={"message_id": p["message_id"], "references": p.get("references_hdr") or "", "subject": p["subject"]},
-        pitch_context={"reply": True, "skills": res.get("mandatory_matched_skills") or [], "tailored": bool(version_id)})
+        cand["id"], job_id, custom_to_email=plan["to"], custom_subject=plan["subject"], custom_body=plan["body"],
+        attachment=attachment, acting_user_id=user_id or cand.get("assigned_user_id"), resume_version_id=version_id,
+        reply_to={"message_id": p["message_id"], "references": p.get("references_hdr") or "", "subject": p["subject"]} if in_thread else None)
     if not out.get("success"):
         raise RuntimeError(out.get("error") or "Could not create the Gmail draft")
-    _set(conn, rid, status="drafted", match_pct=match, job_id=job_id, resume_version_id=version_id, ai_model=data.get("_model"),
-         reason=f"Match {match}% - draft created with {attachment[0]}" + ("" if version_id else " (original resume - no changes needed)"))
+    needs = plan["needs_input"]
+    _set(conn, rid, status="drafted_input" if needs else "drafted", match_pct=match, job_id=job_id, resume_version_id=version_id,
+         ai_model=data.get("_model"),
+         reason=f"Match {match}% - draft created with {attachment[0]}" + ("" if version_id else " (original resume - no changes needed)")
+                + (f". Needs your input in Gmail: {'; '.join(x.strip('[]') for x in needs)}" if needs else "")
+                + (f". Sent to {plan['to']} as the job asks" if not in_thread else ""))
     return "drafted"
 
 

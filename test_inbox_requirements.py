@@ -155,7 +155,7 @@ s = iq.scan_candidate(conn, models.get_candidate_by_id(cid), REC["id"])
 check(s["drafted"] == 1 and s["low_match"] == 1 and s["filtered"] == 2 and s["not_requirement"] == 1 and s["skipped_known"] == 1, f"outcomes: {s}")
 check(all(selected) and fetches and all("PEEK" in f for f in fetches), "INBOX read-only + BODY.PEEK")
 check(any(c and c[0] == "X-GM-RAW" and "category:primary" in c[1] for c in searches), "Primary tab only")
-check(len(ai_calls) == 3, f"no AI for filtered / known mail: {len(ai_calls)} calls")
+check(len([c for c in ai_calls if c.startswith("FROM:")]) == 3, f"no AI for filtered / known mail: {len(ai_calls)} calls")
 check(len(appended) == 1, f"exactly one draft: {len(appended)}")
 m = appended[0] if appended else None
 check(m is not None and m["Subject"] == "Re: Virtusa is Hiring: DevOps SRE Engineers!" and m["In-Reply-To"] == "<req1@virtusa>"
@@ -238,7 +238,7 @@ try:
         page.fill("input[name=password]", PW)
         page.click("button[type=submit]")
         page.wait_for_url("**/dashboard**")
-        check("app.js?v=5.72.0" in page.content(), "cache-buster not bumped to 5.72.0")
+        check("app.js?v=5.73.0" in page.content(), "cache-buster not bumped to 5.73.0")
         page.wait_for_function("typeof state !== 'undefined' && state.consultants && state.consultants.length", timeout=15000)
         page.evaluate(f"openTracker({cid})")
         page.click("#trk-open-reqs")

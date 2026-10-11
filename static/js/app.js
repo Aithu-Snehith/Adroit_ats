@@ -3185,7 +3185,10 @@ function renderDashboardPipeline() {
 let currentCopilotCandId = null;
 let currentCopilotJobId = null;
 
-async function openAiCopilotModal(candId, jobId = null) {
+let currentCopilotVersionId = null;
+
+async function openAiCopilotModal(candId, jobId = null, opts = {}) {
+    currentCopilotVersionId = opts.versionId || null;
     currentCopilotCandId = candId || (state.consultants && state.consultants.length > 0 ? state.consultants[0].id : 1);
     
     if (!jobId && state.jobs && state.jobs.length > 0) {
@@ -3216,7 +3219,7 @@ async function openAiCopilotModal(candId, jobId = null) {
         msgContainer.innerHTML = `
             <div style="display: flex; gap: 10px; align-items: flex-start;">
                 <div style="width: 28px; height: 28px; border-radius: 50%; background: #eff6ff; color: #2563eb; display: flex; align-items: center; justify-content: center; font-size: 0.9rem; flex-shrink: 0;">🤖</div>
-                <div style="background: #f1f5f9; color: #1e293b; padding: 10px 14px; border-radius: 12px; font-size: 0.85rem; max-width: 88%; line-height: 1.5;">
+                <div style="background: #f1f5f9; color: #1e293b; padding: 10px 14px; border-radius: 12px; font-size: 0.85rem; max-width: 88%; line-height: 1.5;" id="copilot-welcome">
                     Here is the standard email for <strong>${escapeHtml(cand.name || 'Candidate')}</strong>. Tell me what to change - tone, length, availability, skills to highlight. I only use facts saved on the consultant's profile; if something is missing I'll ask you instead of making it up.
                 </div>
             </div>
@@ -3232,7 +3235,10 @@ async function openAiCopilotModal(candId, jobId = null) {
                 job_id: currentCopilotJobId,
                 instruction: '',
                 current_subject: '',
-                current_body: ''
+                current_body: '',
+                jd_text: opts.jdText || '',
+                to_email: opts.toEmail || '',
+                optimized_resume_id: currentCopilotVersionId
             })
         });
         const data = await res.json();
@@ -3248,6 +3254,16 @@ async function openAiCopilotModal(candId, jobId = null) {
             if (bccInfo) bccInfo.textContent = (data.bcc || []).length ? `BCC (your vendor contacts at this company): ${data.bcc.join(', ')}` : '';
             const rateChip = document.getElementById('copilot-chip-rate');
             if (rateChip) rateChip.style.display = data.rate_on_file ? '' : 'none';
+            if (data.to_email && toEmailEl) toEmailEl.value = data.to_email;
+            const cl = document.getElementById('copilot-checklist');
+            if (cl) {
+                const items = data.checklist || [];
+                cl.innerHTML = items.length ? '<b style="color:#334155;">What this job asks</b><br>' + items.map(i =>
+                    `<span style="color:${i.ok ? '#059669' : '#b45309'};">${i.ok ? '✓' : '⚠'} ${escapeHtml(i.text)}</span>`).join('<br>') : '';
+                cl.style.display = items.length ? '' : 'none';
+                const welcome = document.getElementById('copilot-welcome');
+                if (welcome && items.length) welcome.innerHTML = `Here is the application email for <strong>${escapeHtml(cand.name || 'the consultant')}</strong>, written from the job description and the resume that will be attached. Check the ⚠ items above the email (and any [please fill] parts) before saving. Tell me what to change.`;
+            }
         }
     } catch (e) {
         console.error('Error fetching baseline pitch:', e);
@@ -3383,6 +3399,7 @@ async function submitCopilotDraftToGmail() {
     const body = bodyEl ? bodyEl.value.trim() : '';
     const saveBtn = document.getElementById('btn-copilot-save-draft');
 
+    if (/\[please (fill|add):/i.test(body) && !confirm('The email still has [please fill / add] parts. Save it to Gmail anyway and fill them there?')) return;
     if (!toEmail || !toEmail.includes('@')) {
         showToast('Please enter a valid recipient recruiter email', 'warning');
         if (toEmailEl) toEmailEl.focus();
@@ -3403,7 +3420,8 @@ async function submitCopilotDraftToGmail() {
                 job_id: currentCopilotJobId,
                 custom_to_email: toEmail,
                 custom_subject: subject,
-                custom_body: body
+                custom_body: body,
+                optimized_resume_id: currentCopilotVersionId
             })
         });
 
@@ -5043,14 +5061,13 @@ async function jobOptimizeSaveAndDraft() {
     $('btn-do-save').disabled = true;
     try {
         const d = await optimizeEnsureSaved();
-        const email = (optPanel.emailInput ? optPanel.emailInput.value : '').trim();
-        if (!email || !email.includes('@')) {
-            showToast(`Saved ${d.filename}. Paste the recruiter email in the job row, then click 1-Click Draft - it attaches this resume.`, 'warning', 9000);
-            $('btn-do-save').disabled = false;
-            return;
-        }
+        // Review step: the chat window opens with an email that follows the JD's instructions, written
+        // from this saved resume, with a "What this job asks" checklist - then Save to Gmail.
         $('modal-draft-optimize').style.display = 'none';
-        await createJobDraft(optPanel.jobId, optPanel.candId, email, null, d.id);
+        $('btn-do-save').disabled = false;
+        showToast(`Saved ${d.filename}. Writing the application email from the job description...`, 'info', 5000);
+        await openAiCopilotModal(optPanel.candId, optPanel.jobId, { jdText: $('do-jd').value, versionId: d.id,
+            toEmail: (optPanel.emailInput ? optPanel.emailInput.value : '').trim() });
     } catch (err) {
         showToast(err.message, 'error', 6000);
         $('btn-do-save').disabled = false;
@@ -5401,7 +5418,7 @@ async function rpCheck() {
 // Requirements from Gmail (inbox_requirements.py): requirement email -> tailored resume -> draft reply.
 // =========================================================================
 const rq = { wired: false, poll: null };
-const RQ_COLORS = { drafted: '#dcfce7', low_match: '#fef3c7', not_requirement: '#f1f5f9', filtered: '#f1f5f9', error: '#fee2e2', checking: '#e0f2fe' };
+const RQ_COLORS = { drafted: '#dcfce7', drafted_input: '#fef9c3', low_match: '#fef3c7', not_requirement: '#f1f5f9', filtered: '#f1f5f9', error: '#fee2e2', checking: '#e0f2fe' };
 
 function openRequirements(candId) {
     const $ = id => document.getElementById(id);
@@ -5427,7 +5444,7 @@ async function rqLoad() {
     if (!res.ok) { $('rq-msg').textContent = d.error || 'Could not load.'; return; }
     $('rq-min').textContent = d.min_match;
     const want = $('rq-status').value;
-    const rows = (d.requirements || []).filter(r => !want || r.status === want || (want === 'error' && r.status === 'checking'));
+    const rows = (d.requirements || []).filter(r => !want || r.status === want || (want === 'drafted' && r.status === 'drafted_input') || (want === 'error' && r.status === 'checking'));
     $('rq-body').innerHTML = rows.length ? rows.map(r => `
         <tr data-id="${r.id}">
             <td style="white-space:nowrap;">${escapeHtml((r.received_at || '').slice(0, 16))}</td>

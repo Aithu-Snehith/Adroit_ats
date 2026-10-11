@@ -24,7 +24,9 @@ Apply the recruiter's instruction to the CURRENT email. Keep everything the inst
 to change (earlier edits included). Plain text only - no markdown, no asterisks. Keep the greeting,
 the sign-off and the signature lines (name, phone, email) unless told otherwise.
 
-Facts: use ONLY the facts given in FACTS and anything the recruiter states in the INSTRUCTION. Never
+Facts: use ONLY the facts given in FACTS (FACTS.resume is the resume being attached - its projects and
+figures are real) and anything the recruiter states in the INSTRUCTION. If the job description asks
+applicants to write something (e.g. a note about a challenge they solved), answer it from FACTS.resume. Never
 invent a rate, years of experience, visa / work authorization, availability, notice period, location,
 employer, certification or skill. If the instruction needs a fact that is not given, do NOT make it
 up: leave that part out and ask for it in "needs_info".
@@ -113,6 +115,11 @@ def edit_draft(cand: Dict, job: Dict, instruction: str, subject: str, body: str)
     if not resume_bot.ai_configured():
         return dict(unchanged, reply="The AI isn't set up on the server (no ANTHROPIC_API_KEY or GEMINI_API_KEY), so the draft was not changed. You can still edit it directly.")
     f = facts(cand, job)
+    try:   # the resume that will be attached - so "answer the JD's questions" can use real projects
+        import application_brief
+        f["resume"] = application_brief.resume_text_for(cand, job.get("id"))[0][:8000]
+    except Exception:
+        f["resume"] = ""
     prompt = (f"FACTS:\n{json.dumps(f, indent=1, default=str)}\n\nCURRENT SUBJECT:\n{subject}\n\n"
               f"CURRENT EMAIL:\n{body}\n\nINSTRUCTION:\n{instruction}\n")
     try:
