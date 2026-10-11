@@ -95,6 +95,42 @@ row = next(x for x in d["results"] if x["name"].startswith("Asha"))
 check(row["open_to_work"] == 1 and row["employment_type"] == "Contract" and row["workplace_type"] == "Remote", f"row badges data: {row}")
 check(d["counts"]["matching"] == 5 and d["total"] == 2, "counts stay for the whole search; total is after the checkboxes")
 
+# ---- Postgres row shape: rows come back as models.DbRow (a dict keyed by column name, where the
+# SUM(...) columns share one name). Reading them by iteration crashed the live search.
+import education_filters  # noqa: E402
+
+
+class PgLikeCursor:
+    def __init__(self, cur):
+        self._cur = cur
+
+    def execute(self, *a):
+        return self._cur.execute(*a)
+
+    def fetchone(self):
+        row = self._cur.fetchone()
+        names = ["sum" if d[0].lower().startswith("sum") else d[0].lower() for d in self._cur.description]
+        return models.DbRow(names, tuple(row)) if row is not None else None
+
+
+class PgLikeConn:
+    def __init__(self, conn):
+        self._conn = conn
+
+    def cursor(self):
+        return PgLikeCursor(self._conn.cursor())
+
+
+conn = models.get_db_connection()
+try:
+    params = education_filters.parse_params({"filter": "P", "passout_year": "All"})
+    pg = education_filters.counts(PgLikeConn(conn), params)
+    check(pg == d["counts"], f"counts identical with Postgres-style rows: {pg} vs {d['counts']}")
+except Exception as ex:
+    check(False, f"counts crashed with Postgres-style rows: {ex!r}")
+finally:
+    conn.close()
+
 # ---- re-scrape replaces stale values
 li.ingest_profiles(li.ApifyProfileProvider().to_profiles([item("w-1", "Asha", False, "Full-time", None)]), "apify", ADMIN["id"])
 check(names(open_to_work=1)[0] == ["Chitra"] and "Asha" in names(emp_fulltime=1)[0] and "Asha" not in names(wp_remote=1)[0], "re-scrape updates the values")

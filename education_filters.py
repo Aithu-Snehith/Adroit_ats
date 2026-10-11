@@ -224,7 +224,9 @@ def counts(conn, p: Dict) -> Dict:
     sums.append("SUM(CASE WHEN p.open_to_work IS NULL AND p.current_employment_type IS NULL THEN 1 ELSE 0 END)")
     sums.append("COUNT(*)")
     cur.execute(f"SELECT {', '.join(sums)} FROM linkedin_profiles p WHERE {where}", sparams + params)
-    row = [int(v or 0) for v in cur.fetchone()]
+    got = cur.fetchone()
+    # by position: on Postgres a row is a dict keyed by column name (and the SUM columns share one name)
+    row = [int(got[i] or 0) for i in range(len(sums))]
     keys = list(WORK_FLAGS) + ["no_work_data", "matching"]
     return {"total_scraped": total_all, "added_this_week": week, **dict(zip(keys, row))}
 
