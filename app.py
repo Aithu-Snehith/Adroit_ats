@@ -2088,6 +2088,21 @@ def _resume_version_for(user, candidate_id, version_id, job_id=None):
     return (v["filename"], v["data"], v["id"]) if v and v.get("data") else None
 
 
+@app.route("/api/jd/from-url", methods=["POST"])
+def api_jd_from_url():
+    """Resume Optimizer: the full JD read from a public job posting link (free; never invented -
+    an unreadable posting returns 422 with the reason)."""
+    if not current_user():
+        return jsonify({"error": "Login required"}), 401
+    url = str((request.get_json(silent=True) or {}).get("url") or "").strip()
+    if not re.match(r"^https?://\S+$", url, re.I):
+        return jsonify({"error": "Paste the full link to the job posting (starting with https://)."}), 400
+    text, reason = job_description_fetch.fetch_full_description(url)
+    if not text:
+        return jsonify({"error": reason or "Could not read the job description from that link - paste it instead."}), 422
+    return jsonify({"description": text})
+
+
 @app.route("/api/jd/cloud", methods=["POST"])
 def api_jd_cloud():
     """The JD's primary cloud (AWS / Azure / GCP) and whether the chosen consultant's profile shows it."""

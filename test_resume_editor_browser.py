@@ -6,6 +6,8 @@
 2. Edge: optimize from Paste Requirement & Draft -> the Word file is previewed with the changed line
    highlighted; Find counts and steps; the JD keywords strip counts; clicking a line puts it in the chat;
    a chat edit shows in the preview, Undo takes it back, Save stores the chat-edited Word file.
+3. Edge, Resume Optimizer tab: the JD is read from a job link; the same workspace (preview, Find,
+   keywords, chat) works there and "Save version" stores the chat-edited Word file.
 The AI and Gmail are never contacted (stubs). Labelled test fixtures.
 Run: python test_resume_editor_browser.py
 """
@@ -33,6 +35,7 @@ import app as app_module  # noqa: E402
 import docx  # noqa: E402
 import docx_editor  # noqa: E402
 import gmail_multi_manager as gm  # noqa: E402
+import job_description_fetch  # noqa: E402
 import india_job_scrapers  # noqa: E402
 import models  # noqa: E402
 import resume_bot as rb  # noqa: E402
@@ -61,6 +64,17 @@ class FakeIMAP:
 
 
 gm.imaplib.IMAP4_SSL = FakeIMAP
+fetched_urls = []
+
+
+def fake_fetch(url):
+    fetched_urls.append(url)
+    if "unreadable" in url:
+        return None, "That site blocks automatic reading - paste the JD instead."
+    return JD, ""
+
+
+job_description_fetch.fetch_full_description = fake_fetch
 failures, js_errors, ai_calls = [], [], []
 
 
@@ -180,7 +194,7 @@ try:
         page.fill("input[name=password]", PASSWORD)
         page.click("button[type=submit]")
         page.wait_for_url("**/dashboard**")
-        check("app.js?v=5.80.0" in page.content(), "cache-buster not bumped to 5.80.0")
+        check("app.js?v=5.81.0" in page.content(), "cache-buster not bumped to 5.81.0")
         page.wait_for_function("state.consultants && state.consultants.length >= 1", timeout=15000)
 
         page.click("#btn-open-paste-draft-modal")
@@ -216,7 +230,7 @@ try:
         check(page.input_value("#rv-instr").startswith('In the line "Built REST APIs'), "clicking a line puts it in the chat box")
 
         page.click("#rv-fullscreen")
-        check("rv-full" in page.get_attribute("#modal-draft-optimize", "class"), "full screen toggles")
+        check("rv-full" in page.get_attribute("#rv-workspace", "class") and page.evaluate("getComputedStyle(document.getElementById('rv-workspace')).position") == "fixed", "full screen toggles")
         page.click("#rv-fullscreen")
 
         ai_calls.clear()
@@ -231,7 +245,7 @@ try:
         page.wait_for_function("!document.querySelector('#rv-preview').innerText.includes('Java Full Stack Developer')", timeout=10000)
         check(page.is_disabled("#rv-undo") and "Java Full Stack Developer" not in page.input_value("#do-optimized"), "Undo goes back")
 
-        page.click(".rv-chip[data-instr*='eadline']")
+        page.click("#rv-workspace .rv-chip[data-instr*='eadline']")
         page.wait_for_function("document.querySelector('#rv-preview').innerText.includes('Java Full Stack Developer')", timeout=15000)
         page.screenshot(path=shot)
         page.click("#btn-do-save")
@@ -242,6 +256,48 @@ try:
             v = rv.get(saved[0]["id"])
             body = docx_editor.extract_text(v["data"])
             check("Java Full Stack Developer" in body and "Java, Spring Boot, React" in body, f"the saved Word file has the chat edit: {body!r}")
+        page.click("#btn-close-draft-optimize") if page.is_visible("#btn-close-draft-optimize") else None
+        page.click("#btn-close-paste-draft-modal") if page.is_visible("#btn-close-paste-draft-modal") else None
+
+        # ---- 3. Resume Optimizer tab
+        page.goto(f"http://127.0.0.1:{port}/dashboard#resumebot")
+        page.wait_for_function("state.consultants && state.consultants.length >= 1", timeout=15000)
+        page.click("a.nav-item[data-tab=resumebot]")
+        tab = page.inner_text("#tab-resumebot")
+        check("AI: Claude" in tab or "AI: Google Gemini" in tab, "one-line AI note in the header")
+        check("falls back" not in tab and "free tier" not in tab, "the long AI paragraph is gone")
+        page.select_option("#resumebot-consultant-select", str(cid))
+        page.wait_for_function("document.getElementById('resumebot-resume-text').value.includes('KOUSHIK EDITORUI')", timeout=10000)
+
+        page.fill("#resumebot-jd-url", "https://careers.unreadable.example.invalid/job/9")
+        page.click("#btn-resumebot-read-jd")
+        page.wait_for_selector("text=blocks automatic reading", timeout=10000)
+        check(page.input_value("#resumebot-jd-text") == "", "an unreadable link leaves the JD box empty (nothing invented)")
+        page.fill("#resumebot-jd-url", "https://careers.example.invalid/job/1")
+        page.click("#btn-resumebot-read-jd")
+        page.wait_for_function("document.getElementById('resumebot-jd-text').value.startsWith('Java Full Stack Developer')", timeout=10000)
+        check(fetched_urls[-1] == "https://careers.example.invalid/job/1", f"the link was read: {fetched_urls}")
+
+        page.click("#btn-run-resume-optimization")
+        page.wait_for_function("document.querySelector('#rbw-preview .docx-wrapper') && document.querySelector('#rbw-preview').innerText.includes('React')", timeout=20000)
+        changed = page.eval_on_selector_all("#rbw-preview .rv-changed", "els => els.map(e => e.textContent)")
+        check(changed == ["Java, Spring Boot, React"], f"tab: changed line highlighted: {changed}")
+        check("React 1" in page.inner_text("#rbw-kw"), "tab: keyword counts")
+        page.fill("#rbw-find", "java")
+        page.wait_for_function("document.getElementById('rbw-find-count').innerText === '1 of 3'", timeout=5000)
+        page.fill("#rbw-instr", "Change the headline to Java Full Stack Developer")
+        page.click("#rbw-send")
+        page.wait_for_function("document.querySelector('#rbw-preview').innerText.includes('Java Full Stack Developer')", timeout=15000)
+        check("Java Full Stack Developer" in page.input_value("#result-preview-text"), "tab: the Text tab follows the chat edit")
+        page.screenshot(path=shot.replace(".png", "_tab.png"), full_page=False)
+        page.click("#btn-save-optimized-version")
+        page.wait_for_function("document.getElementById('save-version-status').innerText.includes('Saved as')", timeout=10000)
+        saved = rv.list_for(cid)
+        check(len(saved) == 2, f"tab: second version saved: {saved}")
+        if len(saved) == 2:
+            newest = max(saved, key=lambda x: x["id"])
+            body = docx_editor.extract_text(rv.get(newest["id"])["data"])
+            check("Java Full Stack Developer" in body and "Java, Spring Boot, React" in body, f"tab: saved Word file has the chat edit: {body!r}")
         browser.close()
 finally:
     server.shutdown()
@@ -253,4 +309,4 @@ if failures:
         print(" -", f)
     print("screenshot:", shot)
     sys.exit(1)
-print("PASS resume editor: guards, preview, highlight, Find, keywords, chat edit, Undo, Save")
+print("PASS resume editor: guards, preview, highlight, Find, keywords, chat edit, Undo, Save - Optimize window and Resume Optimizer tab (JD from link)")

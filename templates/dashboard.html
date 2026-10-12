@@ -10,6 +10,70 @@
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=Outfit:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
 </head>
 <body>
+{% macro resume_workspace(p, text_id, orig_id, text_label, h="58vh", chat_h="44vh") %}
+<!-- Resume workspace (app.js makeResumeWorkspace): preview of the real Word file (Find, JD keywords,
+     changes) + "Edit with AI" chat. Used by the Optimize window (p="rv") and the Resume Optimizer tab (p="rbw"). -->
+                <div id="{{ p }}-workspace" class="rv-ws" style="display:grid; grid-template-columns: minmax(0, 1.55fr) minmax(280px, 1fr); gap:12px;">
+                    <div style="min-width:0;">
+                        <div style="display:flex; flex-wrap:wrap; gap:6px; align-items:center; margin-bottom:6px;">
+                            <button type="button" class="rv-tab" style="padding:5px 12px; border:1px solid #cbd5e1; border-radius:7px; background:#fff; font-size:0.8rem; font-weight:700; cursor:pointer;" data-tab="preview" id="{{ p }}-tab-preview">👁 Preview</button>
+                            <button type="button" class="rv-tab" style="padding:5px 12px; border:1px solid #cbd5e1; border-radius:7px; background:#fff; font-size:0.8rem; font-weight:700; cursor:pointer;" data-tab="text" id="{{ p }}-tab-text">✎ Text</button>
+                            <button type="button" class="rv-tab" style="padding:5px 12px; border:1px solid #cbd5e1; border-radius:7px; background:#fff; font-size:0.8rem; font-weight:700; cursor:pointer;" data-tab="original" id="{{ p }}-tab-original">📄 Original</button>
+                            <span style="flex:1"></span>
+                            <input id="{{ p }}-find" class="form-control" placeholder="🔍 Find in resume" style="width:170px; height:30px; font-size:0.8rem;">
+                            <span id="{{ p }}-find-count" style="font-size:0.75rem; color:#475569; min-width:46px;"></span>
+                            <button type="button" id="{{ p }}-find-prev" class="btn btn-secondary btn-xs" title="Previous match">▲</button>
+                            <button type="button" id="{{ p }}-find-next" class="btn btn-secondary btn-xs" title="Next match">▼</button>
+                            <label style="display:flex; align-items:center; gap:4px; font-size:0.75rem; margin:0; text-transform:none; font-weight:600;"><input type="checkbox" id="{{ p }}-show-changes" checked> Show changes</label>
+                            <button type="button" id="{{ p }}-fullscreen" class="btn btn-secondary btn-xs" title="Full screen">⤢</button>
+                        </div>
+                        <div id="{{ p }}-kw" style="display:none; font-size:0.75rem; margin-bottom:6px; line-height:1.9;"></div>
+                        <div id="{{ p }}-pane-preview" class="rv-pane-preview" style="height:{{ h }}; overflow:auto; background:#e2e8f0; border-radius:8px; padding:12px;">
+                            <div id="{{ p }}-preview" class="rv-preview-box"></div>
+                        </div>
+                        <div id="{{ p }}-pane-text" style="display:none;">
+                            <label style="font-size:0.8rem; font-weight:700; color:#475569;">{{ text_label }}</label>
+                            <textarea id="{{ text_id }}" rows="22" class="form-control" style="font-size:0.82rem;"></textarea>
+                        </div>
+                        <div id="{{ p }}-pane-original" style="display:none;">
+                            <label style="font-size:0.8rem; font-weight:700; color:#475569;">Original resume</label>
+                            <textarea id="{{ orig_id }}" rows="22" class="form-control" readonly style="font-size:0.82rem; background:#f8fafc;"></textarea>
+                        </div>
+                    </div>
+                    <div style="display:flex; flex-direction:column; border:1px solid #e2e8f0; border-radius:10px; background:#fff; min-width:0;">
+                        <div style="padding:10px 12px; border-bottom:1px solid #f1f5f9; display:flex; justify-content:space-between; align-items:center;">
+                            <b style="font-size:0.85rem; color:#0f172a;">✏️ Edit with AI</b>
+                            <button type="button" id="{{ p }}-undo" class="btn btn-secondary btn-xs" disabled>↶ Undo</button>
+                        </div>
+                        <div id="{{ p }}-chat-msgs" class="rv-chat-msgs" style="height:{{ chat_h }}; overflow-y:auto; padding:10px 12px; display:flex; flex-direction:column; gap:8px; font-size:0.82rem;">
+                            <div style="background:#f1f5f9; padding:8px 10px; border-radius:10px;">Tell me what to change, e.g. "change the headline to Senior DevOps Engineer" or "remove the Azure line from the summary". I edit the Word file itself, so the format stays. Click a line in the preview to point at it. Dates, years and past job titles stay as they are unless you ask; new technologies only if you name them.</div>
+                        </div>
+                        <div style="padding:6px 10px; display:flex; gap:5px; flex-wrap:wrap; border-top:1px solid #f1f5f9;">
+                            <button type="button" class="btn-prompt-chip rv-chip" data-instr="Change the headline (the title line under the name) to match this job's title">🎯 Headline = JD title</button>
+                            <button type="button" class="btn-prompt-chip rv-chip" data-instr="Make the professional summary shorter - at most 8 bullets, keep the strongest points for this job">✂️ Shorter summary</button>
+                            <button type="button" class="btn-prompt-chip rv-chip" data-instr="Remove summary claims that no project in the resume backs up">🧹 Remove unbacked claims</button>
+                            <button type="button" class="btn-prompt-chip rv-chip" data-instr="In each skills row, move the skills this job asks for to the front (reorder only, add nothing)">🔝 JD skills first</button>
+                        </div>
+                        <div style="padding:8px 10px; display:flex; gap:6px; border-top:1px solid #e2e8f0;">
+                            <input id="{{ p }}-instr" class="form-control" placeholder="What should change?" style="flex:1; font-size:0.82rem;">
+                            <button type="button" id="{{ p }}-send" class="btn btn-primary btn-sm">Send</button>
+                        </div>
+                    </div>
+                </div>
+{% endmacro %}
+<style>
+    .rv-preview-box .docx-wrapper { background: transparent !important; padding: 0 !important; }
+    .rv-preview-box .docx-wrapper > section.docx { box-shadow: 0 2px 10px rgba(15,23,42,0.12); margin: 0 auto 12px !important; }
+    .rv-preview-box p.rv-changed, .rv-preview-box.rv-text div.rv-changed { background: #dcfce7 !important; }
+    .rv-preview-box mark.rv-find { background: #fde68a; padding: 0; }
+    .rv-preview-box mark.rv-find.rv-current { background: #f59e0b; color: #000; }
+    .rv-preview-box p, .rv-preview-box.rv-text div { cursor: pointer; }
+    .rv-tab.on { background: #2563eb !important; color: #fff !important; border-color: #2563eb !important; }
+    .rv-ws.rv-full { position: fixed; inset: 10px; z-index: 12000; background: #fff; padding: 12px; border-radius: 10px; box-shadow: 0 10px 40px rgba(15,23,42,0.45); }
+    .rv-ws.rv-full .rv-pane-preview { height: calc(100vh - 130px) !important; }
+    .rv-ws.rv-full .rv-chat-msgs { height: calc(100vh - 250px) !important; }
+    .rv-ws.rv-full textarea { height: calc(100vh - 160px) !important; }
+</style>
     <div class="app-container">
         <!-- Sidebar Navigation -->
         <aside class="sidebar">
@@ -747,19 +811,8 @@
                     <div class="section-header">
                         <div>
                             <h2>AI Master Resume Optimization Bot</h2>
-                            <p>Align candidate resumes with client JDs following the strict ATS Keyword & Domain Optimization Rules. Generates ready-to-submit Word (.docx) resumes with tailored highlights.</p>
-                            <p style="font-size:0.8rem; color:{{ '#059669' if (has_gemini or has_claude) else '#b45309' }}; margin-top:4px;">
-                                {% if has_claude %}
-                                ✨ Runs your Master Resume Prompt (MASTER_RESUME_PROMPT.md) on Claude ({{ claude_model }}) in two steps: (1) weighted match analysis, decision band and the skills that are safe to add, then (2) the updated resume, written back into your original Word file so its format is kept.
-                                {% if has_gemini or has_openrouter or has_grok %} If Claude can't answer, it automatically falls back to {% if has_gemini %}Google Gemini{% endif %}{% if has_gemini and (has_openrouter or has_grok) %}, then {% endif %}{% if has_openrouter or has_grok %}the backup models{% endif %} - each result names whichever AI actually answered.{% endif %}
-                                {% elif has_gemini %}
-                                ✨ Runs your Master Resume Prompt (MASTER_RESUME_PROMPT.md) on Google Gemini's free tier in two steps: (1) weighted match analysis, decision band and the skills that are safe to add, then (2) the complete updated resume, written back into your original Word file so its format is kept. Each resume uses two of the free daily requests.
-                                {% if has_openrouter or has_grok %} If Gemini can't answer (quota used up, overloaded), it automatically falls back{% if has_openrouter %} to a free backup model on OpenRouter{% endif %}{% if has_openrouter and has_grok %}, then{% endif %}{% if has_grok %} to xAI's Grok (a small paid cost per resume){% endif %} instead of giving up - each result names whichever one actually answered.{% endif %}
-                                If none of them can answer, you get the keyword analysis only and the resume is left unchanged (each result says which happened). Note: on Google's free tier, prompts may be used by Google to improve its products - test with sample resumes, not real candidates' data.
-                                {% else %}
-                                ⚠️ No GEMINI_API_KEY configured yet - only a basic keyword scan is available and the resume is never rewritten. Get a free key at <a href="https://aistudio.google.com/apikey" target="_blank" style="color:#b45309;">aistudio.google.com/apikey</a> and add it as GEMINI_API_KEY.
-                                {% endif %}
-                            </p>
+                            <p>Match a resume to a JD, preview the Word file and edit it with AI.</p>
+                            <p style="font-size:0.82rem; color:#475569; margin-top:4px;">{% if has_claude %}✨ AI: Claude ({{ claude_model }}){% if has_gemini %} · Gemini as backup{% endif %}{% elif has_gemini %}✨ AI: Google Gemini{% else %}⚠️ No AI key set - keyword scan only, the resume is not rewritten.{% endif %}</p>
                         </div>
                     </div>
 
@@ -788,7 +841,11 @@
                         <div class="studio-card">
                             <h3 class="card-title">2. Target Job Description (JD)</h3>
                             <div class="form-group">
-                                <label>Paste Client Requisition / JD</label>
+                                <label>Paste the JD - or a link to the job posting</label>
+                                <div style="display:flex; gap:6px; margin-bottom:6px;">
+                                    <input type="url" id="resumebot-jd-url" class="form-control" placeholder="🔗 Job link (company career page, Workday, Greenhouse, Lever...)" style="flex:1;">
+                                    <button type="button" class="btn btn-secondary btn-sm" id="btn-resumebot-read-jd">Read JD</button>
+                                </div>
                                 <textarea id="resumebot-jd-text" rows="8" class="form-control" placeholder="Paste full client job description here..."></textarea>
                                 <div id="resumebot-jd-note" style="display:none; font-size:0.8rem; margin-top:6px;"></div>
                             </div>
@@ -864,9 +921,8 @@
                             <div id="result-changes" style="font-size:0.85rem; color:#334155;"></div>
                         </div>
 
-                        <div class="form-group" style="margin-top: 16px;">
-                            <label id="result-preview-label">Optimized Resume Preview</label>
-                            <textarea id="result-preview-text" rows="12" class="form-control" readonly></textarea>
+                        <div style="margin-top:14px;">
+                        {{ resume_workspace("rbw", "result-preview-text", "rbw-original", "Optimized resume - edit anything before saving (text edits are applied to the Word file when you save)", "70vh", "56vh") }}
                         </div>
                     </div>
                 </div>
@@ -1218,65 +1274,7 @@
                     <textarea id="do-jd" rows="7" class="form-control" style="font-size:0.8rem; margin-top:6px;"></textarea>
                 </details>
                 <div id="do-cloud" style="display:none; margin-bottom:10px; padding:10px 12px; border-radius:8px; font-size:0.85rem;"></div>
-                <!-- Resume workspace: preview of the real Word file (Find, JD keywords, changes) + "Edit with AI" chat -->
-                <style>
-                    #rv-preview .docx-wrapper { background: transparent !important; padding: 0 !important; }
-                    #rv-preview .docx-wrapper > section.docx { box-shadow: 0 2px 10px rgba(15,23,42,0.12); margin: 0 auto 12px !important; }
-                    #rv-preview p.rv-changed, #rv-preview.rv-text div.rv-changed { background: #dcfce7 !important; }
-                    #rv-preview mark.rv-find { background: #fde68a; padding: 0; }
-                    #rv-preview mark.rv-find.rv-current { background: #f59e0b; color: #000; }
-                    #rv-preview p, #rv-preview.rv-text div { cursor: pointer; }
-                    .rv-tab.on { background: #2563eb !important; color: #fff !important; border-color: #2563eb !important; }
-                    #modal-draft-optimize.rv-full .modal-dialog { max-width: 99vw !important; width: 99vw !important; }
-                    #modal-draft-optimize.rv-full #rv-pane-preview, #modal-draft-optimize.rv-full #rv-chat-msgs { height: 72vh !important; }
-                </style>
-                <div id="rv-workspace" style="display:grid; grid-template-columns: minmax(0, 1.55fr) minmax(280px, 1fr); gap:12px;">
-                    <div style="min-width:0;">
-                        <div style="display:flex; flex-wrap:wrap; gap:6px; align-items:center; margin-bottom:6px;">
-                            <button type="button" class="rv-tab" style="padding:5px 12px; border:1px solid #cbd5e1; border-radius:7px; background:#fff; font-size:0.8rem; font-weight:700; cursor:pointer;" data-tab="preview" id="rv-tab-preview">👁 Preview</button>
-                            <button type="button" class="rv-tab" style="padding:5px 12px; border:1px solid #cbd5e1; border-radius:7px; background:#fff; font-size:0.8rem; font-weight:700; cursor:pointer;" data-tab="text" id="rv-tab-text">✎ Text</button>
-                            <button type="button" class="rv-tab" style="padding:5px 12px; border:1px solid #cbd5e1; border-radius:7px; background:#fff; font-size:0.8rem; font-weight:700; cursor:pointer;" data-tab="original" id="rv-tab-original">📄 Original</button>
-                            <span style="flex:1"></span>
-                            <input id="rv-find" class="form-control" placeholder="🔍 Find in resume" style="width:170px; height:30px; font-size:0.8rem;">
-                            <span id="rv-find-count" style="font-size:0.75rem; color:#475569; min-width:46px;"></span>
-                            <button type="button" id="rv-find-prev" class="btn btn-secondary btn-xs" title="Previous match">▲</button>
-                            <button type="button" id="rv-find-next" class="btn btn-secondary btn-xs" title="Next match">▼</button>
-                            <label style="display:flex; align-items:center; gap:4px; font-size:0.75rem; margin:0; text-transform:none; font-weight:600;"><input type="checkbox" id="rv-show-changes" checked> Show changes</label>
-                            <button type="button" id="rv-fullscreen" class="btn btn-secondary btn-xs" title="Full screen">⤢</button>
-                        </div>
-                        <div id="rv-kw" style="display:none; font-size:0.75rem; margin-bottom:6px; line-height:1.9;"></div>
-                        <div id="rv-pane-preview" style="height:58vh; overflow:auto; background:#e2e8f0; border-radius:8px; padding:12px;">
-                            <div id="rv-preview"></div>
-                        </div>
-                        <div id="rv-pane-text" style="display:none;">
-                            <label style="font-size:0.8rem; font-weight:700; color:#475569;">Optimized for this JD - <span style="color:#059669;">edit anything before saving</span> <span style="font-weight:500; color:#64748b;">(text edits are applied to the Word file when you save)</span></label>
-                            <textarea id="do-optimized" rows="22" class="form-control" style="font-size:0.82rem;"></textarea>
-                        </div>
-                        <div id="rv-pane-original" style="display:none;">
-                            <label style="font-size:0.8rem; font-weight:700; color:#475569;">Original resume</label>
-                            <textarea id="do-original" rows="22" class="form-control" readonly style="font-size:0.82rem; background:#f8fafc;"></textarea>
-                        </div>
-                    </div>
-                    <div style="display:flex; flex-direction:column; border:1px solid #e2e8f0; border-radius:10px; background:#fff; min-width:0;">
-                        <div style="padding:10px 12px; border-bottom:1px solid #f1f5f9; display:flex; justify-content:space-between; align-items:center;">
-                            <b style="font-size:0.85rem; color:#0f172a;">✏️ Edit with AI</b>
-                            <button type="button" id="rv-undo" class="btn btn-secondary btn-xs" disabled>↶ Undo</button>
-                        </div>
-                        <div id="rv-chat-msgs" style="height:44vh; overflow-y:auto; padding:10px 12px; display:flex; flex-direction:column; gap:8px; font-size:0.82rem;">
-                            <div style="background:#f1f5f9; padding:8px 10px; border-radius:10px;">Tell me what to change, e.g. "change the headline to Senior DevOps Engineer" or "remove the Azure line from the summary". I edit the Word file itself, so the format stays. Click a line in the preview to point at it. Dates, years and past job titles stay as they are unless you ask; new technologies only if you name them.</div>
-                        </div>
-                        <div style="padding:6px 10px; display:flex; gap:5px; flex-wrap:wrap; border-top:1px solid #f1f5f9;">
-                            <button type="button" class="btn-prompt-chip rv-chip" data-instr="Change the headline (the title line under the name) to match this job's title">🎯 Headline = JD title</button>
-                            <button type="button" class="btn-prompt-chip rv-chip" data-instr="Make the professional summary shorter - at most 8 bullets, keep the strongest points for this job">✂️ Shorter summary</button>
-                            <button type="button" class="btn-prompt-chip rv-chip" data-instr="Remove summary claims that no project in the resume backs up">🧹 Remove unbacked claims</button>
-                            <button type="button" class="btn-prompt-chip rv-chip" data-instr="In each skills row, move the skills this job asks for to the front (reorder only, add nothing)">🔝 JD skills first</button>
-                        </div>
-                        <div style="padding:8px 10px; display:flex; gap:6px; border-top:1px solid #e2e8f0;">
-                            <input id="rv-instr" class="form-control" placeholder="What should change?" style="flex:1; font-size:0.82rem;">
-                            <button type="button" id="rv-send" class="btn btn-primary btn-sm">Send</button>
-                        </div>
-                    </div>
-                </div>
+                {{ resume_workspace("rv", "do-optimized", "do-original", "Optimized for this JD - edit anything before saving (text edits are applied to the Word file when you save)") }}
                 <div id="do-filename" style="font-size:0.82rem; color:#475569; margin-top:8px;"></div>
                 <!-- The email "Save & Create Draft" will send (shared email component: emailBox('do')) -->
                 <div id="do-email-box" style="display:none; margin-top:14px;"></div>
@@ -1484,7 +1482,7 @@
         window.VIEW_REGION = {{ view_region | tojson }};</script>
     <script src="/static/vendor/jszip.min.js"></script>
     <script src="/static/vendor/docx-preview.min.js"></script>
-    <script src="/static/js/app.js?v=5.80.0"></script>
+    <script src="/static/js/app.js?v=5.81.0"></script>
 
     <!-- Recruiter Management Inline Fallback: app.js defines all of these with toast-based
          feedback and no page reloads. These only fire if app.js somehow failed to load -

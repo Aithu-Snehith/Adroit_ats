@@ -131,7 +131,7 @@ res = run()
 check(not claude_calls and gemini_calls and res.get("optimized"), "without ANTHROPIC_API_KEY Gemini runs as before")
 
 tpl = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "templates", "dashboard.html"), encoding="utf-8").read()
-check("{% if has_claude %}" in tpl and "on Claude ({{ claude_model }})" in tpl, "Resume Bot tab says Claude is the main AI")
+check("{% if has_claude %}" in tpl and "AI: Claude ({{ claude_model }})" in tpl, "Resume Bot tab says Claude is the main AI")
 check("anthropic" in open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "requirements.txt")).read(), "anthropic in requirements")
 
 if failures:

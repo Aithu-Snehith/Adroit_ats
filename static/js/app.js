@@ -1239,6 +1239,54 @@ function initResumeBot() {
     // Show the selected consultant's saved resume as soon as the page is ready.
     loadStoredResume(true);
 
+    // The same resume workspace as the Optimize window: Word preview, Find, JD keywords, Edit with AI.
+    let lastData = null, optSeq = 0;
+    const rbw = makeResumeWorkspace('rbw', {
+        candId: () => (candSelect ? parseInt(candSelect.value) : NaN) || null,
+        jd: () => (jdTextarea ? jdTextarea.value : ''),
+        textId: 'result-preview-text',
+        origId: 'rbw-original',
+        onEdit: (ws) => {
+            // a chat edit is the version Download and Save version use
+            state.lastOptimizedResumeText = ws.text;
+            state.lastOptimizedDocxBase64 = ws.docx;
+            const d = lastData || {};
+            state.lastOptimized = Object.assign(state.lastOptimized || {
+                candidateId: (candSelect ? parseInt(candSelect.value) : NaN) || null, jdText: jdTextarea ? jdTextarea.value : '',
+                primarySkill: d.primary_skill || '', filename: d.suggested_filename || '' }, { aiText: ws.text, docxB64: ws.docx });
+            document.getElementById('result-preview-text').readOnly = false;
+            if (btnDownload) btnDownload.style.display = '';
+            const saveBtn = document.getElementById('btn-save-optimized-version');
+            if (saveBtn) saveBtn.style.display = '';
+        },
+    });
+    rbw.wire();
+    rbw.reset();
+
+    // JD from a link: the full description is read from the public posting (free).
+    const jdUrl = document.getElementById('resumebot-jd-url');
+    const btnReadJd = document.getElementById('btn-resumebot-read-jd');
+    async function readJdLink() {
+        const url = (jdUrl.value || '').trim();
+        if (!url) { showToast('Paste the job link first.', 'warning'); jdUrl.focus(); return; }
+        btnReadJd.disabled = true; btnReadJd.textContent = 'Reading...';
+        try {
+            const res = await fetch('/api/jd/from-url', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ url }) });
+            const d = await res.json().catch(() => ({}));
+            if (!res.ok) { showToast(d.error || 'Could not read that link - paste the JD instead.', 'error', 7000); return; }
+            jdTextarea.value = d.description;
+            showToast(`Job description read from the link (${d.description.length.toLocaleString()} characters).`, 'success');
+        } catch (err) { showToast('Could not read that link: ' + err.message, 'error'); }
+        finally { btnReadJd.disabled = false; btnReadJd.textContent = 'Read JD'; }
+    }
+    if (btnReadJd) btnReadJd.addEventListener('click', readJdLink);
+    if (jdUrl) jdUrl.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); readJdLink(); } });
+    // a link pasted straight into the JD box is read the same way
+    if (jdTextarea) jdTextarea.addEventListener('paste', () => setTimeout(() => {
+        const v = jdTextarea.value.trim();
+        if (/^https?:\/\/\S+$/i.test(v) && jdUrl) { jdUrl.value = v; jdTextarea.value = ''; readJdLink(); }
+    }, 0));
+
     const setList = (id, items, cssClass, prefix, emptyMsg) => {
         const el = document.getElementById(id);
         if (!el) return;
@@ -1271,6 +1319,20 @@ function initResumeBot() {
             }
 
             btnOptimize.disabled = true;
+            // the workspace starts clean, with the Word file being optimized as its "original"
+            const mySeq = ++optSeq;
+            rbw.reset();
+            document.getElementById('rbw-original').value = resume;
+            if (sourceMode === 'file' && attachedDocx) {
+                rbw.loadOriginal(null, await new Promise((ok) => {
+                    const fr = new FileReader();
+                    fr.onload = () => ok(String(fr.result).split(',')[1] || '');
+                    fr.onerror = () => ok('');
+                    fr.readAsDataURL(attachedDocx);
+                }));
+            } else if (sourceMode === 'stored' && storedHasDocx) {
+                rbw.loadOriginal(selectedId);
+            }
             // Progress: a live timer (the server works in one request, so the page shows elapsed time and
             // what happens in order - it does not pretend to know which step the server is on).
             const optStarted = Date.now();
@@ -1425,6 +1487,8 @@ function initResumeBot() {
                     byId('result-preview-text').value = data.updated_resume_text || '';
                     byId('result-preview-text').readOnly = !data.optimized;   // editable once optimized; edits are kept on Save
                 }
+                lastData = data;
+                rbw.showResult(data, () => mySeq !== optSeq);
                 if (btnDownload) btnDownload.style.display = data.optimized ? '' : 'none';
                 state.lastOptimized = data.optimized ? {
                     candidateId: candSelect ? parseInt(candSelect.value) : null, jdText: jd, aiText: data.updated_resume_text || '',
@@ -4942,7 +5006,7 @@ function initDraftOptimize() {
     $('btn-do-save').addEventListener('click', () => (optPanel.mode === 'job' ? jobOptimizeSaveAndDraft() : draftOptimizeSave()));
     $('btn-do-download').addEventListener('click', optimizeDownload);
     $('pd-consultant-select')?.addEventListener('change', () => { if (pdResume.versionId) pdResumeReset(); pdConsultantChanged(); });
-    rvWire();
+    rv.wire();
     $('pd-raw-text')?.addEventListener('input', () => { clearTimeout(pdState.readTimer); pdState.readTimer = setTimeout(pdRead, 1200); });
 }
 
@@ -4952,8 +5016,8 @@ async function openOptimizePanel(opts) {
     const $ = id => document.getElementById(id);
     Object.assign(optPanel, { mode: opts.mode, candId: opts.candId, jobId: opts.jobId || null, emailInput: opts.emailInput || null, saved: null, savedText: '' });
     optPanel.runSeq++;               // anything still running for the previous window is now stale
-    rvReset();
-    rv.origPromise = rvLoadOriginalDocx(opts.candId);
+    rv.reset();
+    rv.loadOriginal(opts.candId);
     pdResume.result = null;
     $('do-optimized').value = '';
     $('do-original').value = '';
@@ -4996,7 +5060,7 @@ async function optRestore(opts) {
         rv.text = cached.edited;
         rv.docx = cached.docx || '';
         rv.edited = !!cached.chatEdited;
-        rvRender();
+        rv.render();
         renderCloudCheck($('do-cloud'), cached.result.cloud_check);
         $('do-status').innerHTML = `<b>Your earlier result for this job</b> (not saved yet) - match ${cached.result.initial_match_percentage ?? '?'}% &rarr; ${cached.result.target_match_percentage ?? '?'}%. Nothing was run again. Click <b>Re-optimize</b> to run the AI again.`;
     } else {
@@ -5013,7 +5077,7 @@ async function optRestore(opts) {
         rv.original = $('do-original').value;
         rv.text = v.text;
         rv.docx = v.docx_base64 || '';
-        rvRender();
+        rv.render();
         $('do-cloud').style.display = 'none';
         optPanel.saved = { id: v.id, filename: v.filename };
         optPanel.savedText = v.text;
@@ -5073,7 +5137,7 @@ async function draftOptimizeRun(firstTime) {
         $('do-optimized').value = data.updated_resume_text || '';
         if (data.optimized) optCache[key] = { result: data, edited: data.updated_resume_text || '', jd,
             docx: data.format_preserved ? (data.docx_base64 || '') : '' };
-        await rvShowResult(data, seq);
+        await rv.showResult(data, () => seq !== optPanel.runSeq);
         renderCloudCheck($('do-cloud'), data.cloud_check);
         $('do-status').innerHTML = (data.optimized
             ? `<b>Optimized</b> - match ${data.initial_match_percentage ?? '?'}% &rarr; ${data.target_match_percentage ?? '?'}%. Review and edit on the right, then ${optPanel.mode === 'job' ? 'Download or Create Draft' : 'Save'}.`
@@ -5096,12 +5160,12 @@ async function draftOptimizeRun(firstTime) {
 }
 
 // =========================================================================
-// Resume workspace in the Optimize window: a preview of the real Word file (changes highlighted, Find,
-// JD keywords) and "Edit with AI" - the recruiter's instructions are applied to the Word file itself
-// (resume_editor.py), so the format stays; Undo steps back.
+// Resume workspace: a preview of the real Word file (changes highlighted, Find, JD keywords) and
+// "Edit with AI" - the recruiter's instructions are applied to the Word file itself (resume_editor.py),
+// so the format stays; Undo steps back. One component, used in two places (templates/dashboard.html
+// macro resume_workspace): the Optimize window (prefix 'rv') and the Resume Optimizer tab ('rbw').
+// host = { candId(), jd(), textId, origId, onEdit(ws) } - what the place it sits in provides.
 // =========================================================================
-const rv = { docx: '', text: '', original: '', origDocx: '', origPromise: null, undo: [], tab: 'preview', marks: [], cur: -1,
-             keywords: [], edited: false, seq: 0, renderSeq: 0 };
 const rvEsc = (t) => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 const rvNorm = (t) => (t || '').replace(/\s+/g, ' ').trim().toLowerCase();
 
@@ -5112,100 +5176,10 @@ function rvB64ToBlob(b64) {
     return new Blob([u], { type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' });
 }
 
-function rvReset() {
-    Object.assign(rv, { docx: '', text: '', original: '', origDocx: '', undo: [], marks: [], cur: -1, keywords: [], edited: false });
-    rv.seq++;
-    const $ = (id) => document.getElementById(id);
-    $('rv-preview').innerHTML = '<div style="color:#475569; font-size:0.85rem; padding:20px;">The resume preview appears here when it is ready.</div>';
-    $('rv-kw').style.display = 'none';
-    $('rv-undo').disabled = true;
-    $('rv-find').value = '';
-    $('rv-find-count').textContent = '';
-    const box = $('rv-chat-msgs');
-    while (box.children.length > 1) box.lastChild.remove();
-    rvTab('preview');
-}
-
-async function rvLoadOriginalDocx(candId) {
-    const seq = rv.seq;
-    try {
-        const d = await (await fetch(`/api/consultants/${candId}/resume-docx`)).json();
-        if (seq === rv.seq) rv.origDocx = d.docx_base64 || '';
-    } catch (e) { /* the text preview is used instead */ }
-}
-
 function rvKeywordsFrom(result) {
     const r = result || {};
     return [...new Set([...(r.mandatory_matched_skills || []), ...(r.partial_match_skills || []), ...(r.mandatory_missing_skills || [])]
         .map(x => String(x).trim()).filter(Boolean))].slice(0, 18);
-}
-
-// After an optimize run: the optimized Word file, or the original one when the resume was left unchanged.
-async function rvShowResult(data, seq) {
-    const $ = (id) => document.getElementById(id);
-    if (rv.origPromise) await rv.origPromise;
-    if (seq !== optPanel.runSeq) return;
-    rv.original = $('do-original').value;
-    rv.keywords = rvKeywordsFrom(data);
-    rv.text = data.updated_resume_text || rv.original;
-    rv.docx = data.format_preserved && data.docx_base64 ? data.docx_base64 : (!data.optimized ? rv.origDocx : '');
-    rv.undo = [];
-    rv.edited = false;
-    $('rv-undo').disabled = true;
-    rvRender();
-}
-
-function rvTab(t) {
-    rv.tab = t;
-    document.querySelectorAll('.rv-tab').forEach(b => b.classList.toggle('on', b.getAttribute('data-tab') === t));
-    document.getElementById('rv-pane-preview').style.display = t === 'preview' ? '' : 'none';
-    document.getElementById('rv-pane-text').style.display = t === 'text' ? '' : 'none';
-    document.getElementById('rv-pane-original').style.display = t === 'original' ? '' : 'none';
-}
-
-async function rvRender() {
-    const box = document.getElementById('rv-preview');
-    const mySeq = ++rv.renderSeq;
-    box.classList.remove('rv-text');
-    if (rv.docx && window.docx && window.docx.renderAsync) {
-        const tmp = document.createElement('div');
-        try {
-            await window.docx.renderAsync(rvB64ToBlob(rv.docx), tmp, null, { inWrapper: true, breakPages: false, ignoreLastRenderedPageBreak: true });
-            if (mySeq !== rv.renderSeq) return;
-            box.innerHTML = '';
-            box.append(...tmp.childNodes);
-        } catch (e) {
-            if (mySeq !== rv.renderSeq) return;
-            rvRenderText(box);
-        }
-    } else {
-        rvRenderText(box);
-    }
-    rvMarkChanges();
-    rvKeywords();
-    if (document.getElementById('rv-find').value.trim()) rvFind();
-}
-
-function rvRenderText(box) {
-    const text = rv.text || document.getElementById('do-optimized').value || '';
-    box.classList.add('rv-text');
-    box.innerHTML = '<div style="background:#fff; padding:24px 28px; max-width:820px; margin:0 auto; font-size:0.85rem; line-height:1.5; box-shadow:0 2px 10px rgba(15,23,42,0.12);">' +
-        text.split('\n').map(l => `<div>${escapeHtml(l) || '&nbsp;'}</div>`).join('') +
-        '<div style="color:#64748b; margin-top:12px; font-size:0.78rem;">Text preview - this resume has no Word (.docx) file, so the AI chat can\'t edit it here.</div></div>';
-}
-
-function rvParas() {
-    const box = document.getElementById('rv-preview');
-    return [...box.querySelectorAll(box.classList.contains('rv-text') ? ':scope > div > div' : 'p')];
-}
-
-function rvMarkChanges() {
-    const orig = new Set((rv.original || '').split('\n').map(rvNorm).filter(Boolean));
-    const show = document.getElementById('rv-show-changes').checked;
-    rvParas().forEach(p => {
-        const t = rvNorm(p.textContent);
-        p.classList.toggle('rv-changed', show && !!t && orig.size > 0 && !orig.has(t));
-    });
 }
 
 function rvCount(text, k) {
@@ -5214,159 +5188,271 @@ function rvCount(text, k) {
     return (text.match(new RegExp('(^|[^a-z0-9])' + rvEsc(s) + '(?=$|[^a-z0-9])', 'g')) || []).length;
 }
 
-function rvKeywords() {
-    const el = document.getElementById('rv-kw');
-    if (!rv.keywords.length) { el.style.display = 'none'; return; }
-    const text = rvParas().map(p => rvNorm(p.textContent)).join('\n');
-    el.innerHTML = '<b style="color:#475569;">JD keywords in this resume:</b> ' + rv.keywords.map(k => {
-        const n = rvCount(text, k);
-        const style = n === 0 ? 'background:#fee2e2; color:#991b1b;' : n >= 8 ? 'background:#fef3c7; color:#92400e;' : 'background:#ecfdf5; color:#065f46;';
-        const tip = n === 0 ? 'Not in the resume' : n >= 8 ? 'Many times - avoid keyword stuffing' : 'Click to find it';
-        return `<button type="button" class="rv-kwbtn" data-k="${escapeHtml(k)}" title="${tip}" style="border:none; border-radius:999px; padding:1px 8px; margin:0 3px 3px 0; cursor:pointer; font-size:0.75rem; ${style}">${escapeHtml(k)} <b>${n}</b></button>`;
-    }).join('');
-    el.style.display = '';
-}
+function makeResumeWorkspace(prefix, host) {
+    const el = (name) => document.getElementById(`${prefix}-${name}`);
+    const ws = { docx: '', text: '', original: '', origDocx: '', origPromise: null, undo: [], tab: 'preview', marks: [], cur: -1,
+                 keywords: [], edited: false, seq: 0, renderSeq: 0, findTimer: null };
 
-function rvClearFind() {
-    const box = document.getElementById('rv-preview');
-    box.querySelectorAll('mark.rv-find').forEach(m => m.replaceWith(document.createTextNode(m.textContent)));
-    box.normalize();
-    rv.marks = [];
-    rv.cur = -1;
-}
+    ws.reset = () => {
+        Object.assign(ws, { docx: '', text: '', original: '', origDocx: '', origPromise: null, undo: [], marks: [], cur: -1, keywords: [], edited: false });
+        ws.seq++;
+        if (!el('preview')) return;
+        el('preview').innerHTML = '<div style="color:#475569; font-size:0.85rem; padding:20px;">The resume preview appears here when it is ready.</div>';
+        el('kw').style.display = 'none';
+        el('undo').disabled = true;
+        el('find').value = '';
+        el('find-count').textContent = '';
+        const box = el('chat-msgs');
+        while (box.children.length > 1) box.lastChild.remove();
+        ws.setTab('preview');
+    };
 
-function rvFind() {
-    rvClearFind();
-    const q = document.getElementById('rv-find').value.trim();
-    if (q) {
-        const re = new RegExp(rvEsc(q), 'gi');
-        const walker = document.createTreeWalker(document.getElementById('rv-preview'), NodeFilter.SHOW_TEXT);
-        const nodes = [];
-        while (walker.nextNode()) nodes.push(walker.currentNode);
-        nodes.forEach(n => {
-            const t = n.nodeValue;
-            re.lastIndex = 0;
-            if (!re.test(t)) return;
-            re.lastIndex = 0;
-            const frag = document.createDocumentFragment();
-            let last = 0, m;
-            while ((m = re.exec(t))) {
-                frag.append(t.slice(last, m.index));
-                const mk = document.createElement('mark');
-                mk.className = 'rv-find';
-                mk.textContent = m[0];
-                frag.append(mk);
-                rv.marks.push(mk);
-                last = m.index + m[0].length;
+    // The original Word file: the consultant's stored .docx (GET), or a base64 string already in hand.
+    ws.loadOriginal = (candId, b64) => {
+        const seq = ws.seq;
+        ws.origPromise = (async () => {
+            if (b64) { ws.origDocx = b64; return; }
+            if (!candId) return;
+            try {
+                const d = await (await fetch(`/api/consultants/${candId}/resume-docx`)).json();
+                if (seq === ws.seq) ws.origDocx = d.docx_base64 || '';
+            } catch (e) { /* the text preview is used instead */ }
+        })();
+        return ws.origPromise;
+    };
+
+    // After an optimize run: the optimized Word file, or the original one when the resume was left unchanged.
+    ws.showResult = async (data, isStale) => {
+        if (ws.origPromise) await ws.origPromise;
+        if (isStale && isStale()) return;
+        ws.original = document.getElementById(host.origId).value;
+        ws.keywords = rvKeywordsFrom(data);
+        ws.text = data.updated_resume_text || ws.original;
+        ws.docx = data.format_preserved && data.docx_base64 ? data.docx_base64 : (!data.optimized ? ws.origDocx : '');
+        ws.undo = [];
+        ws.edited = false;
+        el('undo').disabled = true;
+        ws.render();
+    };
+
+    ws.setTab = (t) => {
+        ws.tab = t;
+        document.querySelectorAll(`#${prefix}-workspace .rv-tab`).forEach(b => b.classList.toggle('on', b.getAttribute('data-tab') === t));
+        el('pane-preview').style.display = t === 'preview' ? '' : 'none';
+        el('pane-text').style.display = t === 'text' ? '' : 'none';
+        el('pane-original').style.display = t === 'original' ? '' : 'none';
+    };
+
+    const paras = () => {
+        const box = el('preview');
+        return [...box.querySelectorAll(box.classList.contains('rv-text') ? ':scope > div > div' : 'p')];
+    };
+
+    const renderText = (box) => {
+        const text = ws.text || document.getElementById(host.textId).value || '';
+        box.classList.add('rv-text');
+        box.innerHTML = '<div style="background:#fff; padding:24px 28px; max-width:820px; margin:0 auto; font-size:0.85rem; line-height:1.5; box-shadow:0 2px 10px rgba(15,23,42,0.12);">' +
+            text.split('\n').map(l => `<div>${escapeHtml(l) || '&nbsp;'}</div>`).join('') +
+            '<div style="color:#64748b; margin-top:12px; font-size:0.78rem;">Text preview - this resume has no Word (.docx) file, so the AI chat can\'t edit it here.</div></div>';
+    };
+
+    ws.render = async () => {
+        const box = el('preview');
+        const mySeq = ++ws.renderSeq;
+        box.classList.remove('rv-text');
+        if (ws.docx && window.docx && window.docx.renderAsync) {
+            const tmp = document.createElement('div');
+            try {
+                await window.docx.renderAsync(rvB64ToBlob(ws.docx), tmp, null, { inWrapper: true, breakPages: false, ignoreLastRenderedPageBreak: true });
+                if (mySeq !== ws.renderSeq) return;
+                box.innerHTML = '';
+                box.append(...tmp.childNodes);
+            } catch (e) {
+                if (mySeq !== ws.renderSeq) return;
+                renderText(box);
             }
-            frag.append(t.slice(last));
-            n.replaceWith(frag);
-        });
-        rv.cur = rv.marks.length ? 0 : -1;
-    }
-    rvFindShow();
-}
-
-function rvFindStep(d) {
-    if (!rv.marks.length) { rvFind(); return; }
-    rv.cur = (rv.cur + d + rv.marks.length) % rv.marks.length;
-    rvFindShow();
-}
-
-function rvFindShow() {
-    const q = document.getElementById('rv-find').value.trim();
-    rv.marks.forEach((m, i) => m.classList.toggle('rv-current', i === rv.cur));
-    document.getElementById('rv-find-count').textContent = rv.marks.length ? `${rv.cur + 1} of ${rv.marks.length}` : (q ? '0 found' : '');
-    if (rv.cur >= 0) rv.marks[rv.cur].scrollIntoView({ block: 'center' });
-}
-
-function rvBubble(html, who) {
-    const box = document.getElementById('rv-chat-msgs');
-    const d = document.createElement('div');
-    const styles = { me: 'align-self:flex-end; background:#2563eb; color:#fff;', ok: 'background:#f1f5f9;', warn: 'background:#fffbeb; border:1px solid #fde68a; color:#92400e;' };
-    d.style.cssText = `padding:8px 10px; border-radius:10px; max-width:92%; line-height:1.45; ${styles[who] || styles.ok}`;
-    d.className = 'rv-msg rv-msg-' + who;
-    d.innerHTML = html;
-    box.appendChild(d);
-    box.scrollTop = box.scrollHeight;
-}
-
-function rvAfterEdit() {
-    const $ = (id) => document.getElementById(id);
-    rv.edited = true;
-    $('do-optimized').value = rv.text;
-    optPanel.saved = null;
-    const r = pdResume.result || {};
-    pdResume.result = Object.assign({}, r, { optimized: true, updated_resume_text: rv.text, format_preserved: true, docx_base64: rv.docx });
-    const c = optCache[optKey()];
-    optCache[optKey()] = Object.assign(c || { result: pdResume.result, jd: $('do-jd').value }, { edited: rv.text, docx: rv.docx, chatEdited: true });
-    $('btn-do-save').disabled = false;
-    $('btn-do-download').style.display = '';
-    $('rv-undo').disabled = !rv.undo.length;
-    rvRender();
-}
-
-async function rvSend(instr) {
-    const $ = (id) => document.getElementById(id);
-    const instruction = (instr || $('rv-instr').value || '').trim();
-    if (!instruction) return;
-    if (!rv.docx) { rvBubble('This resume has no Word (.docx) file to edit - edit it in the Text tab instead.', 'warn'); return; }
-    rvBubble(escapeHtml(instruction), 'me');
-    $('rv-instr').value = '';
-    const btn = $('rv-send');
-    btn.disabled = true; btn.textContent = '...';
-    const seq = rv.seq;
-    try {
-        const res = await fetch('/api/resume-editor/edit', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ candidate_id: optPanel.candId, docx_base64: rv.docx, instruction, original_text: rv.original, jd_text: $('do-jd').value }) });
-        const d = await res.json().catch(() => ({}));
-        if (seq !== rv.seq) return;                       // another resume was opened meanwhile
-        if (!res.ok) { rvBubble(escapeHtml(d.error || 'Could not edit the resume.'), 'warn'); return; }
-        if (d.changed) {
-            rv.undo.push({ docx: rv.docx, text: rv.text });
-            rv.docx = d.docx_base64;
-            rv.text = d.text;
-            rvAfterEdit();
+        } else {
+            renderText(box);
         }
-        const list = (d.applied || []).map(a => `<li>${a.op === 'delete' ? 'Removed' : a.op === 'insert_after' ? 'Added' : 'Changed'}: ${escapeHtml((a.after || a.before || '').slice(0, 110))}</li>`).join('');
-        const needs = (d.needs_info || []).length ? `<div>❓ ${d.needs_info.map(escapeHtml).join('<br>❓ ')}</div>` : '';
-        rvBubble(escapeHtml(d.reply || '') + (list ? `<ul style="margin:4px 0 0 16px; padding:0;">${list}</ul>` : '') + needs, d.changed ? 'ok' : 'warn');
-    } catch (err) {
-        rvBubble(escapeHtml(err.message), 'warn');
-    } finally { btn.disabled = false; btn.textContent = 'Send'; }
+        ws.markChanges();
+        ws.renderKeywords();
+        if (el('find').value.trim()) ws.find();
+    };
+
+    ws.markChanges = () => {
+        const orig = new Set((ws.original || '').split('\n').map(rvNorm).filter(Boolean));
+        const show = el('show-changes').checked;
+        paras().forEach(p => {
+            const t = rvNorm(p.textContent);
+            p.classList.toggle('rv-changed', show && !!t && orig.size > 0 && !orig.has(t));
+        });
+    };
+
+    ws.renderKeywords = () => {
+        const box = el('kw');
+        if (!ws.keywords.length) { box.style.display = 'none'; return; }
+        const text = paras().map(p => rvNorm(p.textContent)).join('\n');
+        box.innerHTML = '<b style="color:#475569;">JD keywords in this resume:</b> ' + ws.keywords.map(k => {
+            const n = rvCount(text, k);
+            const style = n === 0 ? 'background:#fee2e2; color:#991b1b;' : n >= 8 ? 'background:#fef3c7; color:#92400e;' : 'background:#ecfdf5; color:#065f46;';
+            const tip = n === 0 ? 'Not in the resume' : n >= 8 ? 'Many times - avoid keyword stuffing' : 'Click to find it';
+            return `<button type="button" class="rv-kwbtn" data-k="${escapeHtml(k)}" title="${tip}" style="border:none; border-radius:999px; padding:1px 8px; margin:0 3px 3px 0; cursor:pointer; font-size:0.75rem; ${style}">${escapeHtml(k)} <b>${n}</b></button>`;
+        }).join('');
+        box.style.display = '';
+    };
+
+    const clearFind = () => {
+        const box = el('preview');
+        box.querySelectorAll('mark.rv-find').forEach(m => m.replaceWith(document.createTextNode(m.textContent)));
+        box.normalize();
+        ws.marks = [];
+        ws.cur = -1;
+    };
+
+    const findShow = () => {
+        const q = el('find').value.trim();
+        ws.marks.forEach((m, i) => m.classList.toggle('rv-current', i === ws.cur));
+        el('find-count').textContent = ws.marks.length ? `${ws.cur + 1} of ${ws.marks.length}` : (q ? '0 found' : '');
+        if (ws.cur >= 0) ws.marks[ws.cur].scrollIntoView({ block: 'center' });
+    };
+
+    ws.find = () => {
+        clearFind();
+        const q = el('find').value.trim();
+        if (q) {
+            const re = new RegExp(rvEsc(q), 'gi');
+            const walker = document.createTreeWalker(el('preview'), NodeFilter.SHOW_TEXT);
+            const nodes = [];
+            while (walker.nextNode()) nodes.push(walker.currentNode);
+            nodes.forEach(n => {
+                const t = n.nodeValue;
+                re.lastIndex = 0;
+                if (!re.test(t)) return;
+                re.lastIndex = 0;
+                const frag = document.createDocumentFragment();
+                let last = 0, m;
+                while ((m = re.exec(t))) {
+                    frag.append(t.slice(last, m.index));
+                    const mk = document.createElement('mark');
+                    mk.className = 'rv-find';
+                    mk.textContent = m[0];
+                    frag.append(mk);
+                    ws.marks.push(mk);
+                    last = m.index + m[0].length;
+                }
+                frag.append(t.slice(last));
+                n.replaceWith(frag);
+            });
+            ws.cur = ws.marks.length ? 0 : -1;
+        }
+        findShow();
+    };
+
+    const findStep = (d) => {
+        if (!ws.marks.length) { ws.find(); return; }
+        ws.cur = (ws.cur + d + ws.marks.length) % ws.marks.length;
+        findShow();
+    };
+
+    const bubble = (html, who) => {
+        const box = el('chat-msgs');
+        const d = document.createElement('div');
+        const styles = { me: 'align-self:flex-end; background:#2563eb; color:#fff;', ok: 'background:#f1f5f9;', warn: 'background:#fffbeb; border:1px solid #fde68a; color:#92400e;' };
+        d.style.cssText = `padding:8px 10px; border-radius:10px; max-width:92%; line-height:1.45; ${styles[who] || styles.ok}`;
+        d.className = 'rv-msg rv-msg-' + who;
+        d.innerHTML = html;
+        box.appendChild(d);
+        box.scrollTop = box.scrollHeight;
+    };
+
+    const afterEdit = () => {
+        ws.edited = true;
+        document.getElementById(host.textId).value = ws.text;
+        el('undo').disabled = !ws.undo.length;
+        host.onEdit(ws);
+        ws.render();
+    };
+
+    ws.send = async (instr) => {
+        const instruction = (instr || el('instr').value || '').trim();
+        if (!instruction) return;
+        if (!ws.docx) { bubble('This resume has no Word (.docx) file to edit - edit it in the Text tab instead.', 'warn'); return; }
+        bubble(escapeHtml(instruction), 'me');
+        el('instr').value = '';
+        const btn = el('send');
+        btn.disabled = true; btn.textContent = '...';
+        const seq = ws.seq;
+        try {
+            const res = await fetch('/api/resume-editor/edit', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ candidate_id: host.candId(), docx_base64: ws.docx, instruction, original_text: ws.original, jd_text: host.jd() }) });
+            const d = await res.json().catch(() => ({}));
+            if (seq !== ws.seq) return;                       // another resume was opened meanwhile
+            if (!res.ok) { bubble(escapeHtml(d.error || 'Could not edit the resume.'), 'warn'); return; }
+            if (d.changed) {
+                ws.undo.push({ docx: ws.docx, text: ws.text });
+                ws.docx = d.docx_base64;
+                ws.text = d.text;
+                afterEdit();
+            }
+            const list = (d.applied || []).map(a => `<li>${a.op === 'delete' ? 'Removed' : a.op === 'insert_after' ? 'Added' : 'Changed'}: ${escapeHtml((a.after || a.before || '').slice(0, 110))}</li>`).join('');
+            const needs = (d.needs_info || []).length ? `<div>❓ ${d.needs_info.map(escapeHtml).join('<br>❓ ')}</div>` : '';
+            bubble(escapeHtml(d.reply || '') + (list ? `<ul style="margin:4px 0 0 16px; padding:0;">${list}</ul>` : '') + needs, d.changed ? 'ok' : 'warn');
+        } catch (err) {
+            bubble(escapeHtml(err.message), 'warn');
+        } finally { btn.disabled = false; btn.textContent = 'Send'; }
+    };
+
+    ws.wire = () => {
+        if (!el('workspace')) return;
+        document.querySelectorAll(`#${prefix}-workspace .rv-tab`).forEach(b => b.addEventListener('click', () => ws.setTab(b.getAttribute('data-tab'))));
+        el('find').addEventListener('input', () => { clearTimeout(ws.findTimer); ws.findTimer = setTimeout(ws.find, 250); });
+        el('find').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); findStep(e.shiftKey ? -1 : 1); } });
+        el('find-next').addEventListener('click', () => findStep(1));
+        el('find-prev').addEventListener('click', () => findStep(-1));
+        el('show-changes').addEventListener('change', ws.markChanges);
+        el('fullscreen').addEventListener('click', () => el('workspace').classList.toggle('rv-full'));
+        el('kw').addEventListener('click', (e) => { const b = e.target.closest('.rv-kwbtn'); if (b) { ws.setTab('preview'); el('find').value = b.getAttribute('data-k'); ws.find(); } });
+        el('preview').addEventListener('click', (e) => {
+            if (e.target.closest('mark')) return;
+            const p = e.target.closest('p') || e.target.closest('.rv-text > div > div');
+            const t = p ? p.textContent.trim() : '';
+            if (!t) return;
+            el('instr').value = `In the line "${t.slice(0, 140)}${t.length > 140 ? '…' : ''}": `;
+            el('instr').focus();
+        });
+        el('send').addEventListener('click', () => ws.send());
+        el('instr').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); ws.send(); } });
+        document.querySelectorAll(`#${prefix}-workspace .rv-chip`).forEach(b => b.addEventListener('click', () => ws.send(b.getAttribute('data-instr'))));
+        el('undo').addEventListener('click', () => {
+            const prev = ws.undo.pop();
+            if (!prev) return;
+            ws.docx = prev.docx;
+            ws.text = prev.text;
+            afterEdit();
+            bubble('↶ Undone - back to the previous version.', 'ok');
+        });
+        document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && el('workspace').classList.contains('rv-full')) el('workspace').classList.remove('rv-full'); });
+    };
+    return ws;
 }
 
-function rvWire() {
-    const $ = (id) => document.getElementById(id);
-    if (!$('rv-workspace')) return;
-    document.querySelectorAll('.rv-tab').forEach(b => b.addEventListener('click', () => rvTab(b.getAttribute('data-tab'))));
-    $('rv-find').addEventListener('input', () => { clearTimeout(rv.findTimer); rv.findTimer = setTimeout(rvFind, 250); });
-    $('rv-find').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); rvFindStep(e.shiftKey ? -1 : 1); } });
-    $('rv-find-next').addEventListener('click', () => rvFindStep(1));
-    $('rv-find-prev').addEventListener('click', () => rvFindStep(-1));
-    $('rv-show-changes').addEventListener('change', rvMarkChanges);
-    $('rv-fullscreen').addEventListener('click', () => $('modal-draft-optimize').classList.toggle('rv-full'));
-    $('rv-kw').addEventListener('click', (e) => { const b = e.target.closest('.rv-kwbtn'); if (b) { rvTab('preview'); $('rv-find').value = b.getAttribute('data-k'); rvFind(); } });
-    $('rv-preview').addEventListener('click', (e) => {
-        if (e.target.closest('mark')) return;
-        const p = e.target.closest('p') || (e.target.closest('#rv-preview.rv-text div > div'));
-        const t = p ? p.textContent.trim() : '';
-        if (!t) return;
-        $('rv-instr').value = `In the line "${t.slice(0, 140)}${t.length > 140 ? '…' : ''}": `;
-        $('rv-instr').focus();
-    });
-    $('rv-send').addEventListener('click', () => rvSend());
-    $('rv-instr').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); rvSend(); } });
-    document.querySelectorAll('.rv-chip').forEach(b => b.addEventListener('click', () => rvSend(b.getAttribute('data-instr'))));
-    $('rv-undo').addEventListener('click', () => {
-        const prev = rv.undo.pop();
-        if (!prev) return;
-        rv.docx = prev.docx;
-        rv.text = prev.text;
-        rvAfterEdit();
-        rvBubble('↶ Undone - back to the previous version.', 'ok');
-    });
-}
+// The Optimize window's workspace. A chat edit counts as an unsaved optimized result of this job.
+const rv = makeResumeWorkspace('rv', {
+    candId: () => optPanel.candId,
+    jd: () => document.getElementById('do-jd').value,
+    textId: 'do-optimized',
+    origId: 'do-original',
+    onEdit: (ws) => {
+        const $ = (id) => document.getElementById(id);
+        optPanel.saved = null;
+        const r = pdResume.result || {};
+        pdResume.result = Object.assign({}, r, { optimized: true, updated_resume_text: ws.text, format_preserved: true, docx_base64: ws.docx });
+        const c = optCache[optKey()];
+        optCache[optKey()] = Object.assign(c || { result: pdResume.result, jd: $('do-jd').value }, { edited: ws.text, docx: ws.docx, chatEdited: true });
+        $('btn-do-save').disabled = false;
+        $('btn-do-download').style.display = '';
+    },
+});
 
 // Save once per edited text: Download and Create Draft reuse the saved version unless the text changed.
 async function optimizeEnsureSaved() {
