@@ -4896,7 +4896,9 @@ document.addEventListener('DOMContentLoaded', () => {
 // Optimize -> review / edit side by side -> Save (+ use in the draft / create the job's draft) | Download | Re-optimize | Discard.
 // Nothing is saved until the recruiter clicks Save / Download / Create Draft.
 const pdResume = { versionId: null, filename: '', result: null, candId: null };
-const optPanel = { mode: 'paste', candId: null, jobId: null, emailInput: null, saved: null, savedText: '' };
+// runSeq: every open / optimize run gets a new number. A slow answer from an earlier run (another job,
+// or a window that was closed) carries an old number and is ignored - it must never land in this window.
+const optPanel = { mode: 'paste', candId: null, jobId: null, emailInput: null, saved: null, savedText: '', runSeq: 0 };
 // Unsaved optimize results per consultant + job, kept while the page is open: closing the window (x) and
 // reopening the same job brings the result back instead of running the AI again. Discard forgets it.
 const optCache = {};
@@ -4939,6 +4941,13 @@ function initDraftOptimize() {
 async function openOptimizePanel(opts) {
     const $ = id => document.getElementById(id);
     Object.assign(optPanel, { mode: opts.mode, candId: opts.candId, jobId: opts.jobId || null, emailInput: opts.emailInput || null, saved: null, savedText: '' });
+    optPanel.runSeq++;               // anything still running for the previous window is now stale
+    pdResume.result = null;
+    $('do-optimized').value = '';
+    $('do-original').value = '';
+    $('do-cloud').style.display = 'none';
+    $('do-filename').innerHTML = '';
+    $('do-status').innerHTML = '';
     doBox.reset();
     pdResume.result = null;
     $('do-jd').value = opts.jdText || '';
@@ -4956,10 +4965,12 @@ async function openOptimizePanel(opts) {
 // Same consultant + job again: the unsaved result from earlier (this page), else the version saved for this job.
 async function optRestore(opts) {
     const $ = id => document.getElementById(id);
+    const seq = optPanel.runSeq;
     const cached = optCache[optKey()];
     let original = '';
     const loadOriginal = async () => {
         try { const c = await (await fetch(`/api/consultants/${optPanel.candId}`)).json(); original = (c.resume_text || '').trim(); } catch (e) { /* shown empty */ }
+        if (seq !== optPanel.runSeq) return;
         $('do-original').value = original || 'No resume text on file for this consultant.';
     };
     if (cached) {
@@ -4974,8 +4985,10 @@ async function optRestore(opts) {
         if (opts.mode !== 'job') return false;      // pasted requirement: only an unsaved earlier result can come back
         let v = null;
         try { v = (await (await fetch(`/api/optimized-resumes/for-job?candidate_id=${optPanel.candId}&job_id=${optPanel.jobId}`)).json()).version; } catch (e) { v = null; }
+        if (seq !== optPanel.runSeq) return true;      // the window moved on - nothing more to do here
         if (!v || !v.text) return false;
         await loadOriginal();
+        if (seq !== optPanel.runSeq) return true;
         pdResume.result = { optimized: true, updated_resume_text: v.text, saved_version: true };
         pdResume.candId = optPanel.candId;
         $('do-optimized').value = v.text;
@@ -5004,28 +5017,38 @@ async function draftOptimizeRun(firstTime) {
     $('btn-do-download').style.display = 'none';
     $('btn-do-reoptimize').disabled = true;
     optPanel.saved = null;
-    if (firstTime || pdResume.candId !== candId) {
+    const seq = ++optPanel.runSeq;
+    const key = optKey();                       // this run's job, fixed now - not whatever is open when it answers
+    const stale = () => seq !== optPanel.runSeq;
+    pdResume.result = null;
+    if (firstTime || pdResume.candId !== candId || !$('do-original').value.trim()) {
         $('do-original').value = 'Loading...';
         $('do-optimized').value = '';
         try {
             const r = await fetch(`/api/consultants/${candId}`);
             const c = await r.json();
+            if (stale()) return;
             $('do-original').value = (c.resume_text || '').trim() || 'No resume text on file for this consultant.';
-        } catch (err) { $('do-original').value = 'Could not load the original resume.'; }
+        } catch (err) { if (!stale()) $('do-original').value = 'Could not load the original resume.'; }
     }
+    if (stale()) return;
     pdResume.candId = candId;
     const started = Date.now();
-    const tick = () => { $('do-status').innerHTML = `<b>Optimizing - ${Math.round((Date.now() - started) / 1000)}s.</b> The AI checks the match, then writes only the changes. Nothing is saved until you click Save.`; };
+    const tick = () => { if (!stale()) $('do-status').innerHTML = `<b>Optimizing - ${Math.round((Date.now() - started) / 1000)}s.</b> The AI checks the match, then writes only the changes. Nothing is saved until you click Save.`; };
     tick();
     const timer = setInterval(tick, 1000);
     try {
         const res = await fetch('/api/resume-bot/optimize', { method: 'POST', headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ jd_text: jd, candidate_id: candId, use_stored_file: true }) });
         const data = await res.json().catch(() => ({}));
+        if (stale()) {                          // a late answer for another job / a closed window: never shown here,
+            if (res.ok && data.optimized) optCache[key] = { result: data, edited: data.updated_resume_text || '', jd };   // kept for ITS job
+            return;
+        }
         if (!res.ok || data.error) throw new Error(data.error || 'Optimization failed.');
         pdResume.result = data;
         $('do-optimized').value = data.updated_resume_text || '';
-        if (data.optimized) optCache[optKey()] = { result: data, edited: data.updated_resume_text || '', jd };
+        if (data.optimized) optCache[key] = { result: data, edited: data.updated_resume_text || '', jd };
         renderCloudCheck($('do-cloud'), data.cloud_check);
         $('do-status').innerHTML = (data.optimized
             ? `<b>Optimized</b> - match ${data.initial_match_percentage ?? '?'}% &rarr; ${data.target_match_percentage ?? '?'}%. Review and edit on the right, then ${optPanel.mode === 'job' ? 'Download or Create Draft' : 'Save'}.`
@@ -5040,10 +5063,10 @@ async function draftOptimizeRun(firstTime) {
         // resume when the optimizer left it unchanged)
         if (data.optimized || (optPanel.mode !== 'job' && data.ai_powered !== false)) doEmailGenerate();
     } catch (err) {
-        $('do-status').innerHTML = `<span style="color:#b91c1c;">${escapeHtml(err.message)}</span>`;
+        if (!stale()) $('do-status').innerHTML = `<span style="color:#b91c1c;">${escapeHtml(err.message)}</span>`;
     } finally {
         clearInterval(timer);
-        $('btn-do-reoptimize').disabled = false;
+        if (!stale()) $('btn-do-reoptimize').disabled = false;
     }
 }
 
@@ -5115,8 +5138,10 @@ async function jobOptimizeOpen(jobId, candId, row) {
     if (JD_AUTO_FETCH_RE.test(job.url || '')) {
         $('do-status').innerHTML = '<b>Reading the full job description from the posting...</b>';
         try {
+            const seq = optPanel.runSeq;
             const r = await fetch(`/api/jobs/${job.id}/full-description`, { method: 'POST' });
             const d = await r.json().catch(() => ({}));
+            if (seq !== optPanel.runSeq) return;       // another job was opened meanwhile
             if (r.ok && d.description) {
                 job.full_description = d.description;
                 if ($('do-jd').value === summary) $('do-jd').value = d.description;
@@ -5137,7 +5162,7 @@ async function jobOptimizeOpen(jobId, candId, row) {
 // resume_text (optimized text on screen) / optimized_resume_id, to_email.
 function emailBox(prefix, ctx) {
     const $ = (id) => document.getElementById(id);
-    const box = { undo: [], rendered: false };
+    const box = { undo: [], rendered: false, seq: 0 };
     const render = () => {
         if (box.rendered) return;
         box.rendered = true;
@@ -5173,7 +5198,7 @@ function emailBox(prefix, ctx) {
             $(`${prefix}-email-note`).textContent = prev ? '↶ Undone' : '';
         });
     };
-    box.reset = () => { box.undo = []; const el = $(`${prefix}-email-box`); if (el) el.style.display = 'none'; if (box.rendered) { $(`${prefix}-email-body`).value = ''; } };
+    box.reset = () => { box.seq++; box.undo = []; const el = $(`${prefix}-email-box`); if (el) el.style.display = 'none'; if (box.rendered) { $(`${prefix}-email-body`).value = ''; } };
     box.visible = () => { const el = $(`${prefix}-email-box`); return !!el && el.style.display !== 'none' && !!(box.rendered && $(`${prefix}-email-body`).value.trim()); };
     box.values = () => ({ to: $(`${prefix}-email-to`).value.trim(), subject: $(`${prefix}-email-subject`).value.trim(), body: $(`${prefix}-email-body`).value.trim(),
         checklist: box.rendered ? $(`${prefix}-email-checklist`).innerHTML : '' });
@@ -5193,9 +5218,11 @@ function emailBox(prefix, ctx) {
         $(`${prefix}-email-box`).style.display = '';
         $(`${prefix}-email-status`).innerHTML = '<b>Writing the email</b> from the job description and the resume that will be attached...';
         $(`btn-${prefix}-email-rewrite`).disabled = true;
+        const seq = ++box.seq;
         try {
             const res = await fetch('/api/outreach/application-preview', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(ctx()) });
             const d = await res.json().catch(() => ({}));
+            if (seq !== box.seq) return;           // reset / reopened / rewritten again meanwhile
             if (!res.ok) { $(`${prefix}-email-status`).innerHTML = `<span style="color:#b91c1c;">${escapeHtml(d.error || 'Could not write the email.')}</span>`; return; }
             if ($(`${prefix}-email-body`).value) { box.undo.push({ subject: $(`${prefix}-email-subject`).value, body: $(`${prefix}-email-body`).value }); $(`btn-${prefix}-email-undo`).disabled = false; }
             $(`${prefix}-email-to`).value = d.to || '';
