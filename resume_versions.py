@@ -25,10 +25,38 @@ def _clean(part: str) -> str:
     return re.sub(r"_+", "_", re.sub(r"[^A-Za-z0-9]+", "_", part or "")).strip("_")
 
 
+_ROLE_WORD = r"(?:Engineer|Developer|Architect|Analyst|Administrator|Consultant|Scientist|Specialist|Manager|Lead|SRE|Tester|Designer)"
+_ROLE_LINE_RE = re.compile(r"^(?:job\s*title|title|role|position|designation)?\s*[:\-]?\s*(.{3,70})$", re.I)
+_LOOKING_RE = re.compile(r"(?:looking for|hiring|seeking|need)\s+(?:an?\s+|the\s+)?(?:(?:experienced|skilled|talented|strong|seasoned|motivated)\s+)*"
+                         r"((?:[A-Z][\w/&+.#-]*\s+){0,4}" + _ROLE_WORD + r")\b")
+
+
+def jd_role(jd_text: str) -> str:
+    """The role the JD hires for ('DevOps Engineer'), from its title line or 'looking for an experienced X'."""
+    lines = [l.strip() for l in (jd_text or "").splitlines() if l.strip()][:6]
+    for line in lines:
+        # job-board headers run on: "DevOps Engineer DEPARTMENTDevelopment EMPLOYMENT TYPEFull Time ..." (labels in capitals)
+        line = re.split(r"\s+(?:DEPARTMENT|LOCATION|EMPLOYMENT|EXPERIENCE|SALARY|JOB TYPE)", line)[0].strip()
+        m = _ROLE_LINE_RE.match(line)
+        if m and re.search(r"\b" + _ROLE_WORD + r"\b", m.group(1)) and not line.endswith((".", ":")) and len(m.group(1).split()) <= 8:
+            role = re.sub(r"\s*[\(\[].*$", "", m.group(1))
+            return " ".join(role.split()[:6]).strip(" -|,")
+    m = _LOOKING_RE.search(jd_text or "")
+    return m.group(1).strip() if m else ""
+
+
 def primary_skill(result: Dict, cand: Optional[Dict], jd_text: str) -> str:
+    """The label in the saved file's name: the JD's role + the matched skill the JD mentions most
+    ('DevOps Engineer Terraform'), else that skill alone, else the consultant's main skill."""
     matched = [s for s in (result or {}).get("mandatory_matched_skills") or [] if str(s).strip()]
     jd = (jd_text or "").lower()
     in_jd = [s for s in matched if str(s).strip().lower() in jd]
+    # the skill the JD talks about most (not just the first one listed)
+    in_jd.sort(key=lambda s: -jd.count(str(s).strip().lower()))
+    role = jd_role(jd_text)
+    if role:
+        top = next((str(s).strip() for s in in_jd if str(s).strip().lower() not in role.lower()), "")
+        return f"{role} {top}".strip()
     if in_jd:
         return str(in_jd[0]).strip()
     if matched:

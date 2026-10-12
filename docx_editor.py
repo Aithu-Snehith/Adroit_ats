@@ -270,10 +270,12 @@ def edits_from_rewrite(entries, paragraphs):
     return edits, len(seen)
 
 
-def apply_edits(docx_bytes, edits, extra_check=None):
+def apply_edits(docx_bytes, edits, extra_check=None, allow_headings=False, allow_delete=False):
     """Applies the AI's edits to the original document. Returns (new_docx_bytes, applied,
     skipped). Every edit is checked on its own; refused ones are reported with the reason.
-    `extra_check(old_text, new_text, inserting)` may return a further reason to refuse an edit."""
+    `extra_check(old_text, new_text, inserting)` may return a further reason to refuse an edit.
+    The resume chat (resume_editor) may also pass allow_headings (the recruiter asked to change a
+    headline / title - lines with dates still never change) and allow_delete ('delete' edits)."""
     document, paragraphs = load_paragraphs(docx_bytes)
     by_index = {p["index"]: p for p in paragraphs}
     applied, skipped = [], []
@@ -294,17 +296,36 @@ def apply_edits(docx_bytes, edits, extra_check=None):
             skip(edit, "it did not name a paragraph number")
             continue
         target = by_index.get(idx)
-        if op not in ("replace", "insert_after"):
+        if op not in ("replace", "insert_after", "delete"):
             skip(edit, "unknown edit type")
         elif target is None:
             skip(edit, f"there is no paragraph {idx}")
         elif len(applied) >= MAX_EDITS:
             skip(edit, f"more than {MAX_EDITS} edits were proposed")
+        elif op == "delete":
+            problem = ""
+            if not allow_delete:
+                problem = "lines are only removed when you ask to remove them"
+            elif target["locked"]:
+                problem = "that paragraph contains a link/field that removing would break"
+            elif target["heading"] and not allow_headings:
+                problem = "headings and title lines are never removed"
+            elif _YEAR_RE.search(target["text"]):
+                problem = "that line contains dates, which must never change"
+            elif idx in replaced:
+                problem = "that paragraph was already edited"
+            if problem:
+                skip(edit, problem)
+            else:
+                el = target["paragraph"]._p
+                el.getparent().remove(el)
+                replaced.add(idx)
+                applied.append({"op": "delete", "paragraph": idx, "before": target["text"], "after": ""})
         elif op == "replace":
             problem = ""
             if target["locked"]:
                 problem = "that paragraph contains a link/field that editing would break"
-            elif target["heading"]:
+            elif target["heading"] and not allow_headings:
                 problem = "headings and title lines are never edited"
             elif idx in replaced:
                 problem = "that paragraph was already edited"

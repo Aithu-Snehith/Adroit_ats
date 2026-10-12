@@ -4844,6 +4844,13 @@ async function pdCloudCheck() {
         const res = await fetch('/api/jd/cloud', { method: 'POST', headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ jd_text: jd, candidate_id: cid || null }) });
         const d = await res.json();
+        if (res.ok && d.any_cloud) {
+            note.style.display = 'block';
+            note.style.background = '#eff6ff'; note.style.border = '1px solid #bfdbfe'; note.style.color = '#1e3a8a';
+            note.innerHTML = `☁ <b>JD accepts any major cloud</b> (${escapeHtml((d.mentioned || []).join(', '))})` +
+                (d.consultant_clouds && d.consultant_clouds.length ? ` - the consultant's ${escapeHtml(d.consultant_clouds.join(', '))} experience counts.` : '.');
+            return;
+        }
         if (!res.ok || !d.primary) { note.style.display = 'none'; return; }
         const others = (d.mentioned || []).filter(c => c !== d.primary);
         const cand = (state.consultants || []).find(c => c.id === cid);
@@ -4935,6 +4942,7 @@ function initDraftOptimize() {
     $('btn-do-save').addEventListener('click', () => (optPanel.mode === 'job' ? jobOptimizeSaveAndDraft() : draftOptimizeSave()));
     $('btn-do-download').addEventListener('click', optimizeDownload);
     $('pd-consultant-select')?.addEventListener('change', () => { if (pdResume.versionId) pdResumeReset(); pdConsultantChanged(); });
+    rvWire();
     $('pd-raw-text')?.addEventListener('input', () => { clearTimeout(pdState.readTimer); pdState.readTimer = setTimeout(pdRead, 1200); });
 }
 
@@ -4944,6 +4952,8 @@ async function openOptimizePanel(opts) {
     const $ = id => document.getElementById(id);
     Object.assign(optPanel, { mode: opts.mode, candId: opts.candId, jobId: opts.jobId || null, emailInput: opts.emailInput || null, saved: null, savedText: '' });
     optPanel.runSeq++;               // anything still running for the previous window is now stale
+    rvReset();
+    rv.origPromise = rvLoadOriginalDocx(opts.candId);
     pdResume.result = null;
     $('do-optimized').value = '';
     $('do-original').value = '';
@@ -4981,6 +4991,12 @@ async function optRestore(opts) {
         pdResume.candId = optPanel.candId;
         if (cached.jd) $('do-jd').value = cached.jd;
         $('do-optimized').value = cached.edited;
+        rv.original = $('do-original').value;
+        rv.keywords = rvKeywordsFrom(cached.result);
+        rv.text = cached.edited;
+        rv.docx = cached.docx || '';
+        rv.edited = !!cached.chatEdited;
+        rvRender();
         renderCloudCheck($('do-cloud'), cached.result.cloud_check);
         $('do-status').innerHTML = `<b>Your earlier result for this job</b> (not saved yet) - match ${cached.result.initial_match_percentage ?? '?'}% &rarr; ${cached.result.target_match_percentage ?? '?'}%. Nothing was run again. Click <b>Re-optimize</b> to run the AI again.`;
     } else {
@@ -4994,6 +5010,10 @@ async function optRestore(opts) {
         pdResume.result = { optimized: true, updated_resume_text: v.text, saved_version: true };
         pdResume.candId = optPanel.candId;
         $('do-optimized').value = v.text;
+        rv.original = $('do-original').value;
+        rv.text = v.text;
+        rv.docx = v.docx_base64 || '';
+        rvRender();
         $('do-cloud').style.display = 'none';
         optPanel.saved = { id: v.id, filename: v.filename };
         optPanel.savedText = v.text;
@@ -5044,13 +5064,16 @@ async function draftOptimizeRun(firstTime) {
             body: JSON.stringify({ jd_text: jd, candidate_id: candId, use_stored_file: true }) });
         const data = await res.json().catch(() => ({}));
         if (stale()) {                          // a late answer for another job / a closed window: never shown here,
-            if (res.ok && data.optimized) optCache[key] = { result: data, edited: data.updated_resume_text || '', jd };   // kept for ITS job
+            if (res.ok && data.optimized) optCache[key] = { result: data, edited: data.updated_resume_text || '', jd,
+                docx: data.format_preserved ? (data.docx_base64 || '') : '' };   // kept for ITS job
             return;
         }
         if (!res.ok || data.error) throw new Error(data.error || 'Optimization failed.');
         pdResume.result = data;
         $('do-optimized').value = data.updated_resume_text || '';
-        if (data.optimized) optCache[key] = { result: data, edited: data.updated_resume_text || '', jd };
+        if (data.optimized) optCache[key] = { result: data, edited: data.updated_resume_text || '', jd,
+            docx: data.format_preserved ? (data.docx_base64 || '') : '' };
+        await rvShowResult(data, seq);
         renderCloudCheck($('do-cloud'), data.cloud_check);
         $('do-status').innerHTML = (data.optimized
             ? `<b>Optimized</b> - match ${data.initial_match_percentage ?? '?'}% &rarr; ${data.target_match_percentage ?? '?'}%. Review and edit on the right, then ${optPanel.mode === 'job' ? 'Download or Create Draft' : 'Save'}.`
@@ -5072,15 +5095,291 @@ async function draftOptimizeRun(firstTime) {
     }
 }
 
+// =========================================================================
+// Resume workspace in the Optimize window: a preview of the real Word file (changes highlighted, Find,
+// JD keywords) and "Edit with AI" - the recruiter's instructions are applied to the Word file itself
+// (resume_editor.py), so the format stays; Undo steps back.
+// =========================================================================
+const rv = { docx: '', text: '', original: '', origDocx: '', origPromise: null, undo: [], tab: 'preview', marks: [], cur: -1,
+             keywords: [], edited: false, seq: 0, renderSeq: 0 };
+const rvEsc = (t) => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+const rvNorm = (t) => (t || '').replace(/\s+/g, ' ').trim().toLowerCase();
+
+function rvB64ToBlob(b64) {
+    const bin = atob(b64);
+    const u = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) u[i] = bin.charCodeAt(i);
+    return new Blob([u], { type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' });
+}
+
+function rvReset() {
+    Object.assign(rv, { docx: '', text: '', original: '', origDocx: '', undo: [], marks: [], cur: -1, keywords: [], edited: false });
+    rv.seq++;
+    const $ = (id) => document.getElementById(id);
+    $('rv-preview').innerHTML = '<div style="color:#475569; font-size:0.85rem; padding:20px;">The resume preview appears here when it is ready.</div>';
+    $('rv-kw').style.display = 'none';
+    $('rv-undo').disabled = true;
+    $('rv-find').value = '';
+    $('rv-find-count').textContent = '';
+    const box = $('rv-chat-msgs');
+    while (box.children.length > 1) box.lastChild.remove();
+    rvTab('preview');
+}
+
+async function rvLoadOriginalDocx(candId) {
+    const seq = rv.seq;
+    try {
+        const d = await (await fetch(`/api/consultants/${candId}/resume-docx`)).json();
+        if (seq === rv.seq) rv.origDocx = d.docx_base64 || '';
+    } catch (e) { /* the text preview is used instead */ }
+}
+
+function rvKeywordsFrom(result) {
+    const r = result || {};
+    return [...new Set([...(r.mandatory_matched_skills || []), ...(r.partial_match_skills || []), ...(r.mandatory_missing_skills || [])]
+        .map(x => String(x).trim()).filter(Boolean))].slice(0, 18);
+}
+
+// After an optimize run: the optimized Word file, or the original one when the resume was left unchanged.
+async function rvShowResult(data, seq) {
+    const $ = (id) => document.getElementById(id);
+    if (rv.origPromise) await rv.origPromise;
+    if (seq !== optPanel.runSeq) return;
+    rv.original = $('do-original').value;
+    rv.keywords = rvKeywordsFrom(data);
+    rv.text = data.updated_resume_text || rv.original;
+    rv.docx = data.format_preserved && data.docx_base64 ? data.docx_base64 : (!data.optimized ? rv.origDocx : '');
+    rv.undo = [];
+    rv.edited = false;
+    $('rv-undo').disabled = true;
+    rvRender();
+}
+
+function rvTab(t) {
+    rv.tab = t;
+    document.querySelectorAll('.rv-tab').forEach(b => b.classList.toggle('on', b.getAttribute('data-tab') === t));
+    document.getElementById('rv-pane-preview').style.display = t === 'preview' ? '' : 'none';
+    document.getElementById('rv-pane-text').style.display = t === 'text' ? '' : 'none';
+    document.getElementById('rv-pane-original').style.display = t === 'original' ? '' : 'none';
+}
+
+async function rvRender() {
+    const box = document.getElementById('rv-preview');
+    const mySeq = ++rv.renderSeq;
+    box.classList.remove('rv-text');
+    if (rv.docx && window.docx && window.docx.renderAsync) {
+        const tmp = document.createElement('div');
+        try {
+            await window.docx.renderAsync(rvB64ToBlob(rv.docx), tmp, null, { inWrapper: true, breakPages: false, ignoreLastRenderedPageBreak: true });
+            if (mySeq !== rv.renderSeq) return;
+            box.innerHTML = '';
+            box.append(...tmp.childNodes);
+        } catch (e) {
+            if (mySeq !== rv.renderSeq) return;
+            rvRenderText(box);
+        }
+    } else {
+        rvRenderText(box);
+    }
+    rvMarkChanges();
+    rvKeywords();
+    if (document.getElementById('rv-find').value.trim()) rvFind();
+}
+
+function rvRenderText(box) {
+    const text = rv.text || document.getElementById('do-optimized').value || '';
+    box.classList.add('rv-text');
+    box.innerHTML = '<div style="background:#fff; padding:24px 28px; max-width:820px; margin:0 auto; font-size:0.85rem; line-height:1.5; box-shadow:0 2px 10px rgba(15,23,42,0.12);">' +
+        text.split('\n').map(l => `<div>${escapeHtml(l) || '&nbsp;'}</div>`).join('') +
+        '<div style="color:#64748b; margin-top:12px; font-size:0.78rem;">Text preview - this resume has no Word (.docx) file, so the AI chat can\'t edit it here.</div></div>';
+}
+
+function rvParas() {
+    const box = document.getElementById('rv-preview');
+    return [...box.querySelectorAll(box.classList.contains('rv-text') ? ':scope > div > div' : 'p')];
+}
+
+function rvMarkChanges() {
+    const orig = new Set((rv.original || '').split('\n').map(rvNorm).filter(Boolean));
+    const show = document.getElementById('rv-show-changes').checked;
+    rvParas().forEach(p => {
+        const t = rvNorm(p.textContent);
+        p.classList.toggle('rv-changed', show && !!t && orig.size > 0 && !orig.has(t));
+    });
+}
+
+function rvCount(text, k) {
+    const s = rvNorm(k);
+    if (!s) return 0;
+    return (text.match(new RegExp('(^|[^a-z0-9])' + rvEsc(s) + '(?=$|[^a-z0-9])', 'g')) || []).length;
+}
+
+function rvKeywords() {
+    const el = document.getElementById('rv-kw');
+    if (!rv.keywords.length) { el.style.display = 'none'; return; }
+    const text = rvParas().map(p => rvNorm(p.textContent)).join('\n');
+    el.innerHTML = '<b style="color:#475569;">JD keywords in this resume:</b> ' + rv.keywords.map(k => {
+        const n = rvCount(text, k);
+        const style = n === 0 ? 'background:#fee2e2; color:#991b1b;' : n >= 8 ? 'background:#fef3c7; color:#92400e;' : 'background:#ecfdf5; color:#065f46;';
+        const tip = n === 0 ? 'Not in the resume' : n >= 8 ? 'Many times - avoid keyword stuffing' : 'Click to find it';
+        return `<button type="button" class="rv-kwbtn" data-k="${escapeHtml(k)}" title="${tip}" style="border:none; border-radius:999px; padding:1px 8px; margin:0 3px 3px 0; cursor:pointer; font-size:0.75rem; ${style}">${escapeHtml(k)} <b>${n}</b></button>`;
+    }).join('');
+    el.style.display = '';
+}
+
+function rvClearFind() {
+    const box = document.getElementById('rv-preview');
+    box.querySelectorAll('mark.rv-find').forEach(m => m.replaceWith(document.createTextNode(m.textContent)));
+    box.normalize();
+    rv.marks = [];
+    rv.cur = -1;
+}
+
+function rvFind() {
+    rvClearFind();
+    const q = document.getElementById('rv-find').value.trim();
+    if (q) {
+        const re = new RegExp(rvEsc(q), 'gi');
+        const walker = document.createTreeWalker(document.getElementById('rv-preview'), NodeFilter.SHOW_TEXT);
+        const nodes = [];
+        while (walker.nextNode()) nodes.push(walker.currentNode);
+        nodes.forEach(n => {
+            const t = n.nodeValue;
+            re.lastIndex = 0;
+            if (!re.test(t)) return;
+            re.lastIndex = 0;
+            const frag = document.createDocumentFragment();
+            let last = 0, m;
+            while ((m = re.exec(t))) {
+                frag.append(t.slice(last, m.index));
+                const mk = document.createElement('mark');
+                mk.className = 'rv-find';
+                mk.textContent = m[0];
+                frag.append(mk);
+                rv.marks.push(mk);
+                last = m.index + m[0].length;
+            }
+            frag.append(t.slice(last));
+            n.replaceWith(frag);
+        });
+        rv.cur = rv.marks.length ? 0 : -1;
+    }
+    rvFindShow();
+}
+
+function rvFindStep(d) {
+    if (!rv.marks.length) { rvFind(); return; }
+    rv.cur = (rv.cur + d + rv.marks.length) % rv.marks.length;
+    rvFindShow();
+}
+
+function rvFindShow() {
+    const q = document.getElementById('rv-find').value.trim();
+    rv.marks.forEach((m, i) => m.classList.toggle('rv-current', i === rv.cur));
+    document.getElementById('rv-find-count').textContent = rv.marks.length ? `${rv.cur + 1} of ${rv.marks.length}` : (q ? '0 found' : '');
+    if (rv.cur >= 0) rv.marks[rv.cur].scrollIntoView({ block: 'center' });
+}
+
+function rvBubble(html, who) {
+    const box = document.getElementById('rv-chat-msgs');
+    const d = document.createElement('div');
+    const styles = { me: 'align-self:flex-end; background:#2563eb; color:#fff;', ok: 'background:#f1f5f9;', warn: 'background:#fffbeb; border:1px solid #fde68a; color:#92400e;' };
+    d.style.cssText = `padding:8px 10px; border-radius:10px; max-width:92%; line-height:1.45; ${styles[who] || styles.ok}`;
+    d.className = 'rv-msg rv-msg-' + who;
+    d.innerHTML = html;
+    box.appendChild(d);
+    box.scrollTop = box.scrollHeight;
+}
+
+function rvAfterEdit() {
+    const $ = (id) => document.getElementById(id);
+    rv.edited = true;
+    $('do-optimized').value = rv.text;
+    optPanel.saved = null;
+    const r = pdResume.result || {};
+    pdResume.result = Object.assign({}, r, { optimized: true, updated_resume_text: rv.text, format_preserved: true, docx_base64: rv.docx });
+    const c = optCache[optKey()];
+    optCache[optKey()] = Object.assign(c || { result: pdResume.result, jd: $('do-jd').value }, { edited: rv.text, docx: rv.docx, chatEdited: true });
+    $('btn-do-save').disabled = false;
+    $('btn-do-download').style.display = '';
+    $('rv-undo').disabled = !rv.undo.length;
+    rvRender();
+}
+
+async function rvSend(instr) {
+    const $ = (id) => document.getElementById(id);
+    const instruction = (instr || $('rv-instr').value || '').trim();
+    if (!instruction) return;
+    if (!rv.docx) { rvBubble('This resume has no Word (.docx) file to edit - edit it in the Text tab instead.', 'warn'); return; }
+    rvBubble(escapeHtml(instruction), 'me');
+    $('rv-instr').value = '';
+    const btn = $('rv-send');
+    btn.disabled = true; btn.textContent = '...';
+    const seq = rv.seq;
+    try {
+        const res = await fetch('/api/resume-editor/edit', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ candidate_id: optPanel.candId, docx_base64: rv.docx, instruction, original_text: rv.original, jd_text: $('do-jd').value }) });
+        const d = await res.json().catch(() => ({}));
+        if (seq !== rv.seq) return;                       // another resume was opened meanwhile
+        if (!res.ok) { rvBubble(escapeHtml(d.error || 'Could not edit the resume.'), 'warn'); return; }
+        if (d.changed) {
+            rv.undo.push({ docx: rv.docx, text: rv.text });
+            rv.docx = d.docx_base64;
+            rv.text = d.text;
+            rvAfterEdit();
+        }
+        const list = (d.applied || []).map(a => `<li>${a.op === 'delete' ? 'Removed' : a.op === 'insert_after' ? 'Added' : 'Changed'}: ${escapeHtml((a.after || a.before || '').slice(0, 110))}</li>`).join('');
+        const needs = (d.needs_info || []).length ? `<div>❓ ${d.needs_info.map(escapeHtml).join('<br>❓ ')}</div>` : '';
+        rvBubble(escapeHtml(d.reply || '') + (list ? `<ul style="margin:4px 0 0 16px; padding:0;">${list}</ul>` : '') + needs, d.changed ? 'ok' : 'warn');
+    } catch (err) {
+        rvBubble(escapeHtml(err.message), 'warn');
+    } finally { btn.disabled = false; btn.textContent = 'Send'; }
+}
+
+function rvWire() {
+    const $ = (id) => document.getElementById(id);
+    if (!$('rv-workspace')) return;
+    document.querySelectorAll('.rv-tab').forEach(b => b.addEventListener('click', () => rvTab(b.getAttribute('data-tab'))));
+    $('rv-find').addEventListener('input', () => { clearTimeout(rv.findTimer); rv.findTimer = setTimeout(rvFind, 250); });
+    $('rv-find').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); rvFindStep(e.shiftKey ? -1 : 1); } });
+    $('rv-find-next').addEventListener('click', () => rvFindStep(1));
+    $('rv-find-prev').addEventListener('click', () => rvFindStep(-1));
+    $('rv-show-changes').addEventListener('change', rvMarkChanges);
+    $('rv-fullscreen').addEventListener('click', () => $('modal-draft-optimize').classList.toggle('rv-full'));
+    $('rv-kw').addEventListener('click', (e) => { const b = e.target.closest('.rv-kwbtn'); if (b) { rvTab('preview'); $('rv-find').value = b.getAttribute('data-k'); rvFind(); } });
+    $('rv-preview').addEventListener('click', (e) => {
+        if (e.target.closest('mark')) return;
+        const p = e.target.closest('p') || (e.target.closest('#rv-preview.rv-text div > div'));
+        const t = p ? p.textContent.trim() : '';
+        if (!t) return;
+        $('rv-instr').value = `In the line "${t.slice(0, 140)}${t.length > 140 ? '…' : ''}": `;
+        $('rv-instr').focus();
+    });
+    $('rv-send').addEventListener('click', () => rvSend());
+    $('rv-instr').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); rvSend(); } });
+    document.querySelectorAll('.rv-chip').forEach(b => b.addEventListener('click', () => rvSend(b.getAttribute('data-instr'))));
+    $('rv-undo').addEventListener('click', () => {
+        const prev = rv.undo.pop();
+        if (!prev) return;
+        rv.docx = prev.docx;
+        rv.text = prev.text;
+        rvAfterEdit();
+        rvBubble('↶ Undone - back to the previous version.', 'ok');
+    });
+}
+
 // Save once per edited text: Download and Create Draft reuse the saved version unless the text changed.
 async function optimizeEnsureSaved() {
     const $ = id => document.getElementById(id);
     const data = pdResume.result;
-    if (!data || !data.optimized) throw new Error('Optimize the resume first.');
+    if (!data || !(data.optimized || rv.edited)) throw new Error('Optimize the resume first (or edit it with the AI chat).');
     const edited = $('do-optimized').value;
     if (optPanel.saved && optPanel.savedText === edited) return optPanel.saved;
-    const d = await saveResumeVersion({ candidateId: optPanel.candId, jobId: optPanel.jobId, jdText: $('do-jd').value, aiText: data.updated_resume_text || '',
-        editedText: edited, docxB64: data.format_preserved ? (data.docx_base64 || '') : '', primarySkill: data.primary_skill || '' });
+    // The Word file shown in the preview (with the chat's edits); text-box edits are applied onto it.
+    const docxB64 = rv.docx || (data.format_preserved ? (data.docx_base64 || '') : '');
+    const d = await saveResumeVersion({ candidateId: optPanel.candId, jobId: optPanel.jobId, jdText: $('do-jd').value,
+        aiText: rv.docx ? (rv.text || edited) : (data.updated_resume_text || ''),
+        editedText: edited, docxB64, primarySkill: data.primary_skill || '' });
     optPanel.saved = d;
     optPanel.savedText = edited;
     delete optCache[optKey()];      // saved: reopening this job now shows the saved version

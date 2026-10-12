@@ -27,6 +27,12 @@ _TERMS = {
 }
 _RX = {c: re.compile("|".join(t), re.I) for c, t in _TERMS.items()}
 _REQUIRED_RE = re.compile(r"required|must|mandatory|primary|strong (experience|knowledge)|hands[- ]on|expert|minimum|\d+\+? ?years", re.I)
+# "Azure, AWS, or GCP" / "AWS or Azure" / "AWS/Azure/GCP" / "any major cloud": the JD accepts ANY of them,
+# so no single cloud is its "primary" one (an AWS candidate is not a mismatch for it).
+_CLOUD_NAME = r"(?:AWS|Amazon Web Services|Azure|Microsoft Azure|GCP|Google Cloud(?: Platform)?)"
+_ALTERNATIVES_RE = re.compile(_CLOUD_NAME + r"(?:\s*(?:,\s*(?:or\b|and/or\b)?|/|\bor\b|\band/or\b)\s*" + _CLOUD_NAME + r")+", re.I)
+_ANY_CLOUD_RE = re.compile(r"any (?:major |public |leading )?cloud|cloud[- ]agnostic|one or more (?:of the )?(?:major )?cloud|"
+                           r"at least one (?:major |public )?cloud", re.I)
 _OPTIONAL_RE = re.compile(r"nice to have|is a plus|\bplus\b|preferred|bonus|good to have|desirable|familiarity", re.I)
 
 # Equivalent services, one row per capability: (capability, AWS, Azure, GCP)
@@ -53,8 +59,23 @@ def detect(text: str) -> Dict[str, int]:
     return {c: len(_RX[c].findall(text)) for c in CLOUDS}
 
 
+def any_cloud(jd_text: str) -> bool:
+    """True when the JD names clouds as alternatives ("AWS, Azure, or GCP") or asks for any cloud."""
+    for line in re.split(r"[\n.;]", jd_text or ""):
+        if _OPTIONAL_RE.search(line):        # "AWS or GCP is a plus" is not "any cloud is fine"
+            continue
+        if _ANY_CLOUD_RE.search(line):
+            return True
+        for m in _ALTERNATIVES_RE.finditer(line):
+            names = {re.sub(r"amazon web services", "aws", re.sub(r"microsoft azure", "azure", re.sub(r"google cloud.*", "gcp", n.lower())))
+                     for n in re.findall(_CLOUD_NAME, m.group(0), re.I)}
+            if len(names) >= 2 and re.search(r"\bor\b|/", m.group(0), re.I):
+                return True
+    return False
+
+
 def jd_cloud(jd_text: str) -> Dict:
-    """{'primary': 'Azure' | None, 'mentioned': [...], 'scores': {...}} for a JD."""
+    """{'primary': 'Azure' | None, 'mentioned': [...], 'scores': {...}, 'any_cloud': bool} for a JD."""
     scores = {c: 0.0 for c in CLOUDS}
     firm = {c: 0.0 for c in CLOUDS}          # mentions outside "nice to have / a plus" lines
     for line in re.split(r"[\n.;]", jd_text or ""):
@@ -71,8 +92,11 @@ def jd_cloud(jd_text: str) -> Dict:
     # A cloud named ONLY as "a plus / nice to have" is not the JD's required cloud - no mismatch warning for it.
     required = [c for c in CLOUDS if firm[c] > 0]
     primary = max(required, key=lambda c: scores[c]) if required else None
+    accepts_any = len(mentioned) >= 2 and any_cloud(jd_text)
+    if accepts_any:
+        primary = None                       # e.g. "Manage cloud environments on Azure, AWS, or GCP"
     return {"primary": primary, "mentioned": mentioned, "optional_only": [c for c in mentioned if c not in required],
-            "scores": {c: round(s, 1) for c, s in scores.items()}}
+            "scores": {c: round(s, 1) for c, s in scores.items()}, "any_cloud": accepts_any}
 
 
 def clouds_in(text: str) -> List[str]:
@@ -92,6 +116,11 @@ def equivalents(source: str, target: str) -> List[Dict]:
 def prompt_block(jd_info: Dict, resume_clouds: List[str]) -> str:
     """Cloud instructions added to the optimizer prompt ('' when the JD names no cloud)."""
     target = jd_info.get("primary")
+    if jd_info.get("any_cloud"):
+        return (f"CLOUD ALIGNMENT (from the app): the JD accepts any of {', '.join(jd_info.get('mentioned') or CLOUDS)} "
+                f"(they are alternatives). The resume shows: {', '.join(resume_clouds) or 'no specific cloud'}. Treat the candidate's "
+                f"own cloud as a full match - do NOT push or add another cloud to reach this JD, and never relabel past work. "
+                f"Emphasise the candidate's real cloud and cloud-agnostic skills (Terraform, Kubernetes, CI/CD) truthfully.")
     if not target:
         return ""
     others = [c for c in jd_info.get("mentioned", []) if c != target]

@@ -5,6 +5,7 @@ import random
 import uuid
 import re
 import io
+import base64
 import json
 import logging
 from pathlib import Path
@@ -19,6 +20,7 @@ import cloud_align
 import resume_versions
 import application_tracker
 import outreach_ai
+import resume_editor
 import docx_editor
 import application_brief
 import regions
@@ -2023,7 +2025,42 @@ def api_optimized_resume_for_job():
         text = docx_editor.extract_text(bytes(v["data"]))
     except Exception:
         text = ""
-    return jsonify({"version": {"id": v["id"], "filename": v["filename"], "created_at": str(v.get("created_at") or "")[:16], "text": text}})
+    return jsonify({"version": {"id": v["id"], "filename": v["filename"], "created_at": str(v.get("created_at") or "")[:16], "text": text,
+                                "docx_base64": base64.b64encode(bytes(v["data"])).decode("ascii")}})
+
+
+@app.route("/api/consultants/<int:candidate_id>/resume-docx", methods=["GET"])
+def api_consultant_resume_docx(candidate_id):
+    """The consultant's original Word resume (base64) - for the resume preview and the resume chat."""
+    user = current_user()
+    if not user:
+        return jsonify({"error": "Login required"}), 401
+    if not can_access_candidate(user, candidate_id):
+        return jsonify({"error": "Consultant not found"}), 404
+    found = models.find_resume_file(models.get_candidate_by_id(candidate_id) or {})
+    if not found or not found[0].lower().endswith(".docx"):
+        return jsonify({"docx_base64": "", "filename": found[0] if found else ""})
+    return jsonify({"docx_base64": base64.b64encode(found[1]).decode("ascii"), "filename": found[0]})
+
+
+@app.route("/api/resume-editor/edit", methods=["POST"])
+def api_resume_editor_edit():
+    """Resume chat: apply the recruiter's instruction to the Word resume shown in the preview."""
+    user = current_user()
+    if not user:
+        return jsonify({"error": "Login required"}), 401
+    data = request.get_json(silent=True) or {}
+    cid = _int_or_none(data.get("candidate_id"))
+    if cid and not can_access_candidate(user, cid):
+        return jsonify({"error": "Consultant not found"}), 404
+    docx_bytes = resume_versions.decode_docx(str(data.get("docx_base64") or ""))
+    if docx_bytes is None:
+        return jsonify({"error": "The resume chat needs the Word (.docx) resume - this one is text only."}), 400
+    if len(docx_bytes) > 5 * 1024 * 1024:
+        return jsonify({"error": "That resume is over 5 MB."}), 413
+    out = resume_editor.edit(docx_bytes, str(data.get("instruction") or "")[:2000], str(data.get("original_text") or "")[:30000],
+                             str(data.get("jd_text") or "")[:20000])
+    return jsonify(out)
 
 
 @app.route("/api/optimized-resumes/<int:version_id>/download", methods=["GET"])

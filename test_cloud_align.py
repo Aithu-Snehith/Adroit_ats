@@ -45,6 +45,16 @@ check(j["primary"] == "Azure" and set(j["mentioned"]) == {"AWS", "Azure", "GCP"}
 check(ca.jd_cloud("Strong AWS (EC2, S3, Lambda functions) required. Azure nice to have.")["primary"] == "AWS", "required beats nice-to-have")
 check(ca.jd_cloud("BigQuery, Dataflow and GKE are mandatory.")["primary"] == "GCP", "GCP via services")
 check(ca.jd_cloud("Java 17 developer: streams, lambda expressions, Spring Boot.")["primary"] is None, "Java lambdas are not AWS")
+# "Azure, AWS, or GCP": alternatives -> any cloud is fine, no primary (an AWS candidate is a match)
+ANY_JD = ("Design CI/CD pipelines using Jenkins, Azure DevOps, GitHub Actions, or GitLab CI. Manage and support cloud environments "
+          "on Azure, AWS, or GCP. Experience with Docker, Kubernetes (AKS/EKS/OpenShift). Expertise in Terraform, ARM Templates, "
+          "CloudFormation. Experience with AWS, Azure, or GCP cloud platforms.")
+j = ca.jd_cloud(ANY_JD)
+check(j["any_cloud"] and j["primary"] is None, f"alternatives = any cloud: {j}")
+check(not ca.jd_cloud(AZURE_JD)["any_cloud"], "'AWS or GCP is a plus' is not 'any cloud'")
+check(ca.jd_cloud("Experience with any major cloud provider.")["any_cloud"] is False, "one-cloud-free text: nothing mentioned -> not flagged")
+blk = ca.prompt_block(j, ["AWS"])
+check("accepts any of" in blk and "do NOT push or add another cloud" in blk, f"AI told the candidate's cloud is a full match: {blk[:160]}")
 only_plus = ca.jd_cloud("Requirements: 5+ years SQL, Power BI, Python, Azure Synapse a plus, strong communication.")
 check(only_plus["primary"] is None and only_plus["optional_only"] == ["Azure"], f"a cloud named only as 'a plus' is not required: {only_plus}")
 check(ca.clouds_in("Pipelines on AWS EMR, S3 and Glue; some BigQuery") == ["AWS", "GCP"], "resume clouds, most first")

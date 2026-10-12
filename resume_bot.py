@@ -1138,6 +1138,11 @@ def optimize_resume_for_jd(resume_text, jd_text, custom_instructions="", docx_by
         result = _keyword_analysis(resume_text, jd_text, reason)
     result["jd_cloud"] = jd_info
     result["cloud_check"] = cloud_align.validate(result.get("updated_resume_text") or resume_text, jd_info["primary"])
+    if jd_info.get("any_cloud"):
+        shown = cloud_align.clouds_in(result.get("updated_resume_text") or resume_text)
+        result["cloud_check"] = {"target": "any", "ok": True, "sections": {}, "resume_clouds": shown, "equivalents": [],
+                                 "message": f"The JD accepts any major cloud ({', '.join(jd_info['mentioned'])})"
+                                            + (f" - the resume's {', '.join(shown)} experience counts." if shown else ".")}
     timings["total_s"] = round(time.monotonic() - started, 2)
     result["timings"] = timings
     logger.info("Resume optimizer timings: %s", timings)

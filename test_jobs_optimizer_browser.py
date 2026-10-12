@@ -175,7 +175,7 @@ try:
         page.fill("input[name=password]", PASSWORD)
         page.click("button[type=submit]")
         page.wait_for_url("**/dashboard**")
-        check("app.js?v=5.79.0" in page.content(), "cache-buster not bumped to 5.79.0")
+        check("app.js?v=5.80.0" in page.content(), "cache-buster not bumped to 5.80.0")
 
         # 1. Browse Jobs on Karun (not the first consultant)
         page.click("a.nav-item[data-tab=candidates]")
@@ -242,6 +242,7 @@ try:
         page.wait_for_function("document.getElementById('do-jd').value.startsWith('FULL DICE DESCRIPTION')", timeout=10000)
         page.wait_for_function("!document.getElementById('btn-do-save').disabled", timeout=20000)
         # closed with x (not saved) and reopened -> the same result and my edit come back, nothing re-run
+        page.click("#rv-tab-text")
         page.fill("#do-optimized", page.input_value("#do-optimized") + "\nMY EDIT KEPT")
         page.click("#btn-close-draft-optimize")
         ai_calls.clear()
