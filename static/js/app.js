@@ -3462,7 +3462,9 @@ async function submitCopilotDraftToGmail() {
 // one-line summary, so for those the recruiter is asked to paste the full description from the posting.
 const FULL_JD_MIN_CHARS = 400;
 // LinkedIn / Dice postings: the server reads the full description from the posting (free).
-const JD_AUTO_FETCH_RE = /^https?:\/\/([a-z0-9-]+\.)*(linkedin\.com\/jobs|dice\.com\/job-detail)\//i;
+// Any posting link is worth one try: the server reads LinkedIn, Dice, Workday, Greenhouse, Lever and any
+// page with standard job-posting data, and says why when it can't (e.g. Naukri's reCAPTCHA).
+const JD_AUTO_FETCH_RE = /^https?:\/\/[^\s]+$/i;
 
 function setActiveConsultant(candidateId) {
     const id = parseInt(candidateId);

@@ -7,10 +7,21 @@ recruiter clicks "Optimize Resume" on a LinkedIn or Dice job, this reads that on
   `div.show-more-less-html__markup`. Same kind of public endpoint the job search already uses.
 - Dice: the posting page's schema.org JobPosting JSON-LD `description`.
 
-Free (plain HTTP, no Apify). Only linkedin.com / dice.com are ever contacted, and the request URL
-is rebuilt from the job id - a stored URL is never fetched as-is (no arbitrary hosts). Nothing is
+- Workday / Greenhouse / Lever career sites: their public job APIs (the pages themselves load the
+  job with JavaScript).
+- Any other public posting (company career sites such as careers.epam.com, Foundit, ...): the page's
+  schema.org JobPosting JSON-LD - the block search engines read.
+- Naukri: refused with a clear reason - it answers automated reads with a reCAPTCHA.
+
+Free (plain HTTP, no Apify). LinkedIn / Dice / Greenhouse / Lever URLs are rebuilt from the job id.
+Any other URL is fetched only if every address its host resolves to is PUBLIC (no localhost, private,
+link-local or reserved ranges - so a stored link can't make the server read its own network), on
+ports 80/443, following at most 3 redirects (each re-checked), reading at most 3 MB. Nothing is
 invented: anything that can't be read returns (None, reason).
 """
+import html as html_lib
+import ipaddress
+import socket
 import json
 import logging
 import re
@@ -144,6 +155,121 @@ def _dice(job_id: str) -> Tuple[Optional[str], str]:
     return html_to_text(desc), ""
 
 
+MAX_BYTES = 3 * 1024 * 1024
+_resolve = socket.getaddrinfo          # replaced in tests (no DNS)
+
+
+def _public_host_problem(url: str) -> str:
+    """'' when the URL is http(s) on 80/443 and its host resolves only to public addresses."""
+    try:
+        p = urllib.parse.urlparse(url)
+    except ValueError:
+        return "That link isn't a valid web address."
+    if p.scheme not in ("http", "https") or not p.hostname:
+        return "That link isn't a web page address."
+    if p.port not in (None, 80, 443):
+        return "That link uses an unusual port, so it isn't read automatically."
+    try:                                   # a raw address in the link is judged as it is, before any lookup
+        literal = ipaddress.ip_address(p.hostname.strip("[]"))
+    except ValueError:
+        literal = None
+    if literal is not None and (not literal.is_global or literal.is_multicast):
+        return "That link points to a private network address, so it isn't read."
+    try:
+        infos = _resolve(p.hostname, p.port or (443 if p.scheme == "https" else 80), proto=socket.IPPROTO_TCP)
+    except (socket.gaierror, UnicodeError, OSError):
+        return "Could not reach the job site."
+    for info in infos:
+        ip = ipaddress.ip_address(info[4][0].split("%")[0])
+        if not ip.is_global or ip.is_multicast:
+            return "That link points to a private network address, so it isn't read."
+    return ""
+
+
+def _get_public(url: str, extra_headers: Optional[dict] = None) -> Tuple[Optional[str], str]:
+    """GET a public page: every hop's host re-checked, at most 3 redirects, at most MAX_BYTES."""
+    for _ in range(4):
+        problem = _public_host_problem(url)
+        if problem:
+            return None, problem
+        try:
+            r = requests.get(url, headers=dict(HEADERS, **(extra_headers or {})), timeout=TIMEOUT, allow_redirects=False)
+        except requests.RequestException as ex:
+            logger.warning("job description fetch failed for %s: %s", url, ex)
+            return None, "Could not reach the job site."
+        if r.status_code in (301, 302, 303, 307, 308) and (getattr(r, "headers", None) or {}).get("Location"):
+            url = urllib.parse.urljoin(url, r.headers["Location"])
+            continue
+        if r.status_code in (404, 410):
+            return None, "The posting is no longer available."
+        if r.status_code in (401, 403, 406, 429):
+            return None, "The job site blocks automatic reading - open the posting and paste the job description."
+        if r.status_code != 200:
+            return None, f"The job site returned an error ({r.status_code})."
+        body = r.content[:MAX_BYTES]
+        return body.decode("utf-8", errors="replace"), ""
+    return None, "The job site redirected too many times."
+
+
+def _greenhouse(url: str) -> Optional[Tuple[Optional[str], str]]:
+    m = re.match(r"https?://(?:boards|job-boards)(?:\.eu)?\.greenhouse\.io/([A-Za-z0-9_-]+)/jobs/(\d+)", url)
+    if not m:
+        return None
+    raw, err = _get(f"https://boards-api.greenhouse.io/v1/boards/{m.group(1)}/jobs/{m.group(2)}")
+    if raw is None:
+        return None, err
+    try:
+        content = json.loads(raw).get("content") or ""
+    except ValueError:
+        return None, "The Greenhouse posting couldn't be read."
+    return html_to_text(html_lib.unescape(content)), ""
+
+
+def _lever(url: str) -> Optional[Tuple[Optional[str], str]]:
+    m = re.match(r"https?://jobs(?:\.eu)?\.lever\.co/([A-Za-z0-9_.-]+)/([0-9a-f-]{36})", url)
+    if not m:
+        return None
+    raw, err = _get(f"https://api.lever.co/v0/postings/{m.group(1)}/{m.group(2)}")
+    if raw is None:
+        return None, err
+    try:
+        d = json.loads(raw)
+    except ValueError:
+        return None, "The Lever posting couldn't be read."
+    parts = [d.get("descriptionPlain") or ""]
+    for block in d.get("lists") or []:
+        parts.append(block.get("text") or "")
+        parts.append(html_to_text(block.get("content") or ""))
+    parts.append(d.get("additionalPlain") or "")
+    return "\n\n".join(p.strip() for p in parts if p and p.strip())[:MAX_CHARS], ""
+
+
+def _workday(url: str) -> Optional[Tuple[Optional[str], str]]:
+    m = re.match(r"https?://([a-z0-9-]+)\.(wd\d+)\.myworkdayjobs\.com/(?:[a-z]{2}-[A-Z]{2}/)?([A-Za-z0-9_-]+)/(job/[^?#]+)", url)
+    if not m:
+        return None
+    tenant, wd, site, path = m.groups()
+    raw, err = _get_public(f"https://{tenant}.{wd}.myworkdayjobs.com/wday/cxs/{tenant}/{site}/{path}", {"Accept": "application/json"})
+    if raw is None:
+        return None, err
+    try:
+        info = json.loads(raw).get("jobPostingInfo") or {}
+    except ValueError:
+        return None, "The Workday posting couldn't be read."
+    return html_to_text(info.get("jobDescription") or ""), ""
+
+
+def _generic(url: str) -> Tuple[Optional[str], str]:
+    page, err = _get_public(url)
+    if page is None:
+        return None, err
+    desc = _job_posting_description(page)
+    if not desc:
+        return None, ("This page doesn't include the job description in a readable form (the site loads it with "
+                      "JavaScript) - open the posting and paste the job description.")
+    return html_to_text(html_lib.unescape(desc) if "&lt;" in desc else desc), ""
+
+
 def fetch_full_description(url: Optional[str]) -> Tuple[Optional[str], str]:
     """(full description text, "") or (None, reason a recruiter can read)."""
     if not url:
@@ -155,8 +281,18 @@ def fetch_full_description(url: Optional[str]) -> Tuple[Optional[str], str]:
     elif dice_id:
         text, err = _dice(dice_id)
         site = "Dice"
+    elif _is_host(url, "naukri.com"):
+        return None, ("Naukri blocks automatic reading (it asks for a reCAPTCHA) - open the posting and paste the "
+                      "job description.")
     else:
-        return None, "Automatic reading only works for LinkedIn and Dice postings."
+        site = "job site"
+        for reader in (_greenhouse, _lever, _workday):
+            got = reader(url)
+            if got is not None:
+                text, err = got
+                break
+        else:
+            text, err = _generic(url)
     if text is None:
         return None, err
     if len(text) < MIN_CHARS:

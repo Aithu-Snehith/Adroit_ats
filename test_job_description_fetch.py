@@ -1,7 +1,7 @@
 """Full job description fetch for the Resume Optimizer (job_description_fetch.py + the
 /api/jobs/<id>/full-description endpoint).
 
-Network is never used: requests.get inside the module is replaced by a stub serving pages shaped
+Network and DNS are never used: requests.get and the resolver inside the module are stubs serving pages shaped
 like the real ones (checked live 2026-10-01: LinkedIn's guest jobPosting page puts the description
 in div.show-more-less-html__markup; Dice job-detail pages carry a schema.org JobPosting JSON-LD
 block). Text below is clearly-labelled test content, not a real posting.
@@ -46,22 +46,33 @@ DICE_PAGE = ('<html><head><script type="application/ld+json">'
 
 
 class FakeResp:
-    def __init__(self, status, text=""):
+    def __init__(self, status, text="", headers=None):
         self.status_code = status
         self.content = text.encode("utf-8")
+        self.headers = headers or {}
 
 
 calls = []
 routes = {}
 
 
-def fake_get(url, headers=None, timeout=None):
+def fake_get(url, headers=None, timeout=None, **kw):
     calls.append(url)
-    status, text = routes.get(url, (404, ""))
-    return FakeResp(status, text)
+    got = routes.get(url, (404, ""))
+    return FakeResp(*got)
 
 
 jdf.requests.get = fake_get
+# DNS is stubbed too: *.public.example -> a public address, *.internal.example -> a private one
+PUBLIC_IP, PRIVATE_IP = "93.184.216.34", "10.0.0.5"
+
+
+def fake_resolve(host, port, proto=None):
+    ip = PRIVATE_IP if host.endswith("internal.example") or host == "localhost" else PUBLIC_IP
+    return [(None, None, None, "", (ip, port))]
+
+
+jdf._resolve = fake_resolve
 
 LI_URL = "https://www.linkedin.com/jobs/view/data-analyst-test-at-test-co-4472303911?trk=x"
 LI_API = "https://www.linkedin.com/jobs-guest/jobs/api/jobPosting/4472303911"
@@ -89,7 +100,52 @@ check(text and "- Write complex SQL" in text and calls[-1] == DICE_URL, f"Dice f
 
 n = len(calls)
 text, err = jdf.fetch_full_description("https://www.naukri.com/job-listings-test-123")
-check(text is None and "LinkedIn and Dice" in err and len(calls) == n, "unsupported site: no request, clear reason")
+check(text is None and "reCAPTCHA" in err and len(calls) == n, "Naukri: no request, clear reason (it blocks automated reads)")
+
+# ---- any other public posting: schema.org JobPosting JSON-LD (company career sites, Foundit, ...)
+CAREERS = "https://careers.public.example/en/vacancy/lead-azure-engineer-123"
+routes[CAREERS] = (200, DICE_PAGE)
+text, err = jdf.fetch_full_description(CAREERS)
+check(text and "- Build Power BI dashboards" in text and calls[-1] == CAREERS, f"career site via JSON-LD: {err!r}")
+JS_ONLY = "https://jsonly.public.example/job/1"
+routes[JS_ONLY] = (200, "<html><body><div id='app'></div><script>load()</script></body></html>")
+text, err = jdf.fetch_full_description(JS_ONLY)
+check(text is None and "JavaScript" in err, f"page without the data: honest reason: {err!r}")
+BLOCKED = "https://blocked.public.example/job/2"
+routes[BLOCKED] = (403, "")
+text, err = jdf.fetch_full_description(BLOCKED)
+check(text is None and "blocks automatic reading" in err, f"403: {err!r}")
+# safety: private / local addresses are never read, even through a redirect
+n = len(calls)
+for bad in ("http://localhost/admin", "http://jobs.internal.example/x", "http://127.0.0.1/x", "http://169.254.169.254/latest/meta-data",
+            "ftp://files.public.example/job", "https://careers.public.example:8443/job"):
+    text, err = jdf.fetch_full_description(bad)
+    check(text is None and err, f"refused: {bad} -> {err!r}")
+check(len(calls) == n, f"no request was made for unsafe links: {calls[n:]}")
+HOP = "https://short.public.example/j/9"
+routes[HOP] = (302, "", {"Location": "http://admin.internal.example/secret"})
+text, err = jdf.fetch_full_description(HOP)
+check(text is None and "private network" in err and calls[-1] == HOP, f"redirect to a private address refused: {err!r} {calls[-1:]}")
+HOP2 = "https://short.public.example/j/10"
+routes[HOP2] = (301, "", {"Location": CAREERS})
+text, err = jdf.fetch_full_description(HOP2)
+check(text and calls[-2:] == [HOP2, CAREERS], "public redirect followed")
+# ATS APIs: Greenhouse / Lever / Workday
+routes["https://boards-api.greenhouse.io/v1/boards/acme/jobs/4012345"] = (200, json.dumps({"content": BODY.replace("<", "&lt;").replace(">", "&gt;")}))
+text, err = jdf.fetch_full_description("https://job-boards.greenhouse.io/acme/jobs/4012345?gh_src=x")
+check(text and "- Write complex SQL" in text, f"Greenhouse API: {err!r}")
+LEVER_ID = "0f3a2b1c-1111-2222-3333-444455556666"
+routes[f"https://api.lever.co/v0/postings/acme/{LEVER_ID}"] = (200, json.dumps({
+    "descriptionPlain": "Test-only Lever posting for automated tests. " * 4,
+    "lists": [{"text": "Requirements", "content": "<li>5+ years of SQL and Power BI</li><li>Python automation</li>"}],
+    "additionalPlain": "Hybrid."}))
+text, err = jdf.fetch_full_description(f"https://jobs.lever.co/acme/{LEVER_ID}/apply")
+check(text and "Requirements" in text and "Python automation" in text, f"Lever API: {err!r}")
+WD = "https://acme.wd5.myworkdayjobs.com/en-US/External/job/Hyderabad/Lead-Azure-Engineer_R12345"
+routes["https://acme.wd5.myworkdayjobs.com/wday/cxs/acme/External/job/Hyderabad/Lead-Azure-Engineer_R12345"] = (
+    200, json.dumps({"jobPostingInfo": {"jobDescription": BODY}}))
+text, err = jdf.fetch_full_description(WD)
+check(text and "- Automate reporting in Python" in text, f"Workday API: {err!r}")
 text, err = jdf.fetch_full_description(None)
 check(text is None and err, "no URL")
 routes["https://www.linkedin.com/jobs-guest/jobs/api/jobPosting/1111111111"] = (404, "")
@@ -144,7 +200,7 @@ r = client.post(f"/api/jobs/{paste_job}/full-description")
 check(r.status_code == 200 and r.get_json()["description"] == "Full pasted requirement text (test)." and len(calls) == n,
       "pasted requirement returns its own text without fetching")
 r = client.post(f"/api/jobs/{naukri_job}/full-description")
-check(r.status_code == 422 and "LinkedIn and Dice" in r.get_json().get("error", ""), f"unsupported site -> 422 with reason: {r.get_json()}")
+check(r.status_code == 422 and "reCAPTCHA" in r.get_json().get("error", ""), f"Naukri -> 422 with reason: {r.get_json()}")
 check(client.post("/api/jobs/999999/full-description").status_code == 404, "unknown job")
 
 if failures:
@@ -152,4 +208,4 @@ if failures:
     for f in failures:
         print("  -", f)
     sys.exit(1)
-print("PASS: full job description - LinkedIn/Dice reading, allowed hosts only, honest failures, saved once and reused.")
+print("PASS: full job description - LinkedIn/Dice, Greenhouse/Lever/Workday APIs, any public page's JobPosting data, Naukri refused with reason, private addresses / redirects refused, honest failures, saved once and reused.")

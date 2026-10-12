@@ -75,7 +75,8 @@ ANALYSIS = {"initial_match_percentage": 75, "match_breakdown": {"mandatory_skill
 
 
 def _fake_generate(client, types, system, prompt, want_json, max_tokens):
-    ai_calls.append("analysis" if want_json else "rewrite")
+    # the optimizer's own calls; email preview / reading calls are "other"
+    ai_calls.append("rewrite" if not want_json else "analysis" if rb._ANALYSIS_CONTRACT in system else "other")
     if want_json:
         return json.dumps(ANALYSIS), False, "stub"
     return "[1] Data Analyst with SQL, Python and Power BI dashboards (test fixture).", False, "stub"
@@ -174,7 +175,7 @@ try:
         page.fill("input[name=password]", PASSWORD)
         page.click("button[type=submit]")
         page.wait_for_url("**/dashboard**")
-        check("app.js?v=5.78.0" in page.content(), "cache-buster not bumped to 5.78.0")
+        check("app.js?v=5.79.0" in page.content(), "cache-buster not bumped to 5.79.0")
 
         # 1. Browse Jobs on Karun (not the first consultant)
         page.click("a.nav-item[data-tab=candidates]")
@@ -251,7 +252,8 @@ try:
         page.click(f"{ROW.format(scraped_id)} .btn-optimize-job")
         page.wait_for_function("document.getElementById('do-jd').value.startsWith('FULL DICE DESCRIPTION')", timeout=10000)
         check(len(fetch_calls) == 1, f"the posting is read once, then reused: {fetch_calls}")
-        page.wait_for_function("!document.getElementById('btn-do-reoptimize').disabled", timeout=20000)
+        # wait for THIS run to finish (its result shown), not just an enabled button left from before
+        page.wait_for_function("document.getElementById('do-status').innerText.includes('Optimized') && !document.getElementById('btn-do-reoptimize').disabled", timeout=20000)
         page.click("#btn-do-discard")
 
         # 3c. posting that can't be read -> summary + reason, no optimization
@@ -260,7 +262,7 @@ try:
         page.wait_for_function("document.getElementById('do-status').innerText.includes('no longer available')", timeout=10000)
         jd = page.input_value("#do-jd")
         check("Data Analyst Gone Test - Gone Corp" in jd and "Summary only (test)." in jd, f"summary kept on failure: {jd!r}")
-        check("Only a short summary" in page.inner_text("#do-status") and not ai_calls, "asks for the full JD, nothing optimized")
+        check("Only a short summary" in page.inner_text("#do-status") and not [c for c in ai_calls if c != "other"], f"asks for the full JD, nothing optimized: {ai_calls}")
         check(not page.is_disabled("#btn-do-reoptimize"), "Re-optimize available once the JD is pasted")
         page.click("#btn-do-discard")
 
