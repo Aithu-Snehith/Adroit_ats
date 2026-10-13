@@ -148,7 +148,8 @@ check(r["created"] == [] and r["skipped"]["already_drafted"] == 10 and r["skippe
 
 # tomorrow (move today's log back a day): the 3 left over are drafted, repeats still skipped
 conn = models.get_db_connection()
-conn.cursor().execute("UPDATE vendor_auto_drafts SET created_at = datetime(created_at, '-1 day')")
+conn.cursor().execute("UPDATE vendor_auto_drafts SET created_at = ?",   # yesterday (works on SQLite and Postgres)
+                      ((__import__("datetime").datetime.now(__import__("datetime").timezone.utc) - __import__("datetime").timedelta(days=1)).strftime("%Y-%m-%d %H:%M:%S"),))
 conn.commit()
 conn.close()
 r = client.post("/api/outreach/auto-vendor-drafts", json={"candidate_id": cid, "job_ids": [J2] + EXTRA}).get_json()

@@ -213,7 +213,7 @@ check(ws.cell(row=2, column=url_col).hyperlink is not None, "LinkedIn URL cell s
 conn = models.get_db_connection()
 cur = conn.cursor()
 cur.execute("SELECT user_id, details FROM capture_log WHERE action = 'export_xlsx'")
-logs = [tuple(x) for x in cur.fetchall()]
+logs = [(x[0], x[1]) for x in cur.fetchall()]
 check(len(logs) == 3 and all(l[0] == REC_ID for l in logs) and [l[1].split(" rows")[0] for l in logs] == ["4", "3", "2"],
       f"export log: {logs}")
 cur.execute("SELECT COUNT(*) FROM capture_log WHERE action = 'capture' AND user_id = ?", (REC_ID,))
@@ -258,7 +258,8 @@ check(names("A", "in-osmania") == ["Pool Testcase", "Three Testcase"], f"pool im
 conn = models.get_db_connection()
 cur = conn.cursor()
 cur.execute("SELECT COUNT(*), MAX(education_complete) FROM linkedin_profiles WHERE linkedin_url LIKE '%t-pool%'")
-cnt, complete = cur.fetchone()
+row = cur.fetchone()
+cnt, complete = row[0], row[1]
 check(cnt == 1 and complete == 0, f"pool profile imported once, marked incomplete: {cnt}, {complete}")
 conn.close()
 li.ingest_profiles(li.ApifyProfileProvider().to_profiles([item("t-pool", "Pool", [
