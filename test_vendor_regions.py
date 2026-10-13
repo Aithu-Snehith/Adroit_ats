@@ -170,6 +170,22 @@ app_module._tag_known_vendors(jobs, ADMIN)
 check(jobs[0].get("vendor", {}).get("count") == 3 and jobs[1].get("vendor", {}).get("count") == 4 and "vendor" not in jobs[2],
       f"job tag counts its own region's list: {[j.get('vendor') for j in jobs]}")
 
+# Postgres rows (models.DbRow) iterate their column names - the counts must read rows by position
+class _PgLikeCursor:
+    def execute(self, sql, params=()):
+        pass
+
+    def fetchall(self):
+        return [models.DbRow(["region", "count"], ("USA", 3)), models.DbRow(["region", "count"], ("India", 2))]
+
+
+class _PgLikeConn:
+    def cursor(self):
+        return _PgLikeCursor()
+
+
+check(vendors.region_counts(_PgLikeConn(), ADMIN) == {"USA": 3, "India": 2}, "counts work with Postgres-style rows")
+
 with client.session_transaction() as s:
     s["user"] = US_REC
 check(client.get("/api/vendors?region=India").get_json()["contacts"] == [], "a recruiter still sees only their own contacts")

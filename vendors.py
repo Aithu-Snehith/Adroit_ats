@@ -347,8 +347,9 @@ def region_counts(conn, user: Dict, owner_id: Optional[int] = None) -> Dict[str,
     cur = conn.cursor()
     cur.execute(f"SELECT region, COUNT(*) FROM vendor_contacts {('WHERE ' + ' AND '.join(where)) if where else ''} GROUP BY region", params)
     counts = {r: 0 for r in REGIONS}
-    for reg, n in cur.fetchall():
-        counts[norm_region(reg)] = counts.get(norm_region(reg), 0) + int(n)
+    for row in cur.fetchall():          # by position: a Postgres row (models.DbRow) iterates its column NAMES
+        reg = norm_region(row[0])
+        counts[reg] = counts.get(reg, 0) + int(row[1] or 0)
     return counts
 
 
