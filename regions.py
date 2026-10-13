@@ -52,7 +52,8 @@ def backfill(conn) -> int:
         cur.execute("""SELECT SUM(CASE WHEN LOWER(COALESCE(country, '')) = 'india' THEN 1 ELSE 0 END),
                               SUM(CASE WHEN LOWER(COALESCE(country, '')) = 'india' THEN 0 ELSE 1 END)
                        FROM candidates WHERE assigned_user_id = ?""", (uid,))
-        india, other = cur.fetchone()
+        row = cur.fetchone()        # by position: a Postgres row (models.DbRow) iterates its column names
+        india, other = row[0], row[1]
         cur.execute("UPDATE users SET region = ? WHERE id = ?", ("India" if (india or 0) > (other or 0) else "USA", uid))
     conn.commit()
     return len(ids)
