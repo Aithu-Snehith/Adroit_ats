@@ -74,7 +74,7 @@ try:
         page = browser.new_page(viewport={"width": 1440, "height": 950})
         page.on("pageerror", lambda e: js_errors.append(str(e)))
         login(page, ADMIN)
-        check("app.js?v=5.81.0" in page.content(), "cache-buster not bumped to 5.81.0")
+        check("app.js?v=5.82.0" in page.content(), "cache-buster not bumped to 5.82.0")
         check(page.input_value("#view-region-switch") == "", "admin starts on Both")
         page.wait_for_function("state.consultants.length === 2", timeout=10000)
         check(not page.is_disabled("#filter-country"), "Both: market selectable")

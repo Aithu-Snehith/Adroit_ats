@@ -7,6 +7,10 @@
 - A company is recognised by its email domain (most reliable - e.g. @apexsystems.com) or by its
   name with Inc / LLC / Corp ... removed. Personal domains (gmail, yahoo...) never identify a company.
 - Contacts can be marked unsubscribed / bounced; those are never put in an email.
+- Two lists per recruiter: USA vendors and India vendors (vendor_contacts.region). A draft only ever
+  uses the list of its consultant's region, so an India requirement never BCCs a US vendor. The same
+  email may sit in both lists. Existing contacts were sorted once by guess_region() (phone / email),
+  falling back to the recruiter's own team.
 """
 import csv
 import io
@@ -43,6 +47,51 @@ HEADER_SYNONYMS = {
 
 class VendorError(ValueError):
     pass
+
+
+REGIONS = ("USA", "India")
+
+
+def norm_region(value: Optional[str], default: str = "USA") -> str:
+    v = (value or "").strip().lower()
+    return "India" if v in ("india", "in") else ("USA" if v in ("usa", "us", "united states") else default)
+
+
+_US_GROUPED = re.compile(r"^(\(\d{3}\)[\s.-]*|\d{3}[\s.-]+)\d{3}[\s.-]+\d{4}$")
+_IN_GROUPED = re.compile(r"^\d{5}[\s.-]+\d{5}$")
+
+
+def guess_region(phone: Optional[str], email: Optional[str]) -> str:
+    """'India' / 'USA' when the phone or email says so, '' when they don't.
+    +91 / 91XXXXXXXXXX / '98765 43210' / an .in email -> India; +1 / 1XXXXXXXXXX / '(949) 688-0755' -> USA.
+    A bare 10-digit number is NOT a signal: US area codes can start with 6-9 too (949...)."""
+    p = (phone or "").strip()
+    digits = re.sub(r"\D", "", p)
+    if p.startswith("+91") or p.startswith("0091") or (len(digits) == 12 and digits.startswith("91") and digits[2] in "6789"):
+        return "India"
+    if p.startswith("+1") or (len(digits) == 11 and digits.startswith("1")):
+        return "USA"
+    if _IN_GROUPED.match(p):
+        return "India"
+    if _US_GROUPED.match(p):
+        return "USA"
+    d = email_domain(email)
+    if d.endswith(".in"):
+        return "India"
+    return ""
+
+
+def backfill_regions(conn) -> int:
+    """Give every contact without a region one, once: from its phone / email, else its recruiter's team."""
+    cur = conn.cursor()
+    cur.execute("""SELECT v.id, v.phone, v.email, u.region FROM vendor_contacts v LEFT JOIN users u ON u.id = v.owner_user_id
+                   WHERE v.region IS NULL OR v.region = ''""")
+    rows = cur.fetchall()
+    for r in rows:
+        region = guess_region(r[1], r[2]) or norm_region(r[3])
+        cur.execute("UPDATE vendor_contacts SET region = ? WHERE id = ?", (region, r[0]))
+    conn.commit()
+    return len(rows)
 
 
 def normalize_company(name: Optional[str]) -> str:
@@ -225,38 +274,43 @@ def validate(rows: Iterable[Dict], existing_emails: set) -> List[Dict]:
 
 # ---------------------------------------------------------------- database
 
-def _owner_emails(cur, owner_id: int) -> set:
-    cur.execute("SELECT LOWER(email) FROM vendor_contacts WHERE owner_user_id = ?", (owner_id,))
+def _owner_emails(cur, owner_id: int, region: str = "USA") -> set:
+    cur.execute("SELECT LOWER(email) FROM vendor_contacts WHERE owner_user_id = ? AND region = ?", (owner_id, norm_region(region)))
     return {r[0] for r in cur.fetchall()}
 
 
-def preview(conn, owner_id: int, file_bytes: bytes, filename: str) -> List[Dict]:
+def preview(conn, owner_id: int, file_bytes: bytes, filename: str, region: str = "USA") -> List[Dict]:
     rows = parse_rows(read_table(file_bytes, filename))
-    return validate(rows, _owner_emails(conn.cursor(), owner_id))
+    return validate(rows, _owner_emails(conn.cursor(), owner_id, region))
 
 
-def import_rows(conn, owner_id: int, rows: List[Dict], source: str = "upload") -> Dict:
-    """Re-validates on the server and inserts only the new rows. Returns counts."""
+def import_rows(conn, owner_id: int, rows: List[Dict], source: str = "upload", region: str = "USA") -> Dict:
+    """Re-validates on the server and inserts only the new rows into that region's list. Returns counts."""
+    region = norm_region(region)
     cur = conn.cursor()
-    checked = validate(rows, _owner_emails(cur, owner_id))
+    checked = validate(rows, _owner_emails(cur, owner_id, region))
     added = 0
     for r in checked:
         if r["status"] != "new":
             continue
         cur.execute("""INSERT INTO vendor_contacts (owner_user_id, company_name, company_norm, email, email_domain,
-                       contact_name, phone, title, notes, status, source) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?)""",
+                       contact_name, phone, title, notes, status, source, region) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?)""",
                     (owner_id, r["company"], normalize_company(r["company"]), r["email"], company_domain(r["email"]),
-                     r.get("name") or "", r.get("phone") or "", r.get("title") or "", r.get("notes") or "", source))
+                     r.get("name") or "", r.get("phone") or "", r.get("title") or "", r.get("notes") or "", source, region))
         added += 1
     conn.commit()
     return {"added": added, "duplicates": sum(1 for r in checked if r["status"] == "duplicate"),
             "problems": sum(1 for r in checked if r["status"] == "problem")}
 
 
-def list_contacts(conn, user: Dict, q: str = "", owner_id: Optional[int] = None) -> List[Dict]:
-    """A recruiter gets their own contacts; an admin gets everyone's (optionally one recruiter's)."""
+def list_contacts(conn, user: Dict, q: str = "", owner_id: Optional[int] = None, region: Optional[str] = None) -> List[Dict]:
+    """A recruiter gets their own contacts; an admin gets everyone's (optionally one recruiter's).
+    region: only that list (USA / India)."""
     is_admin = "Admin" in (user.get("role") or "")
     where, params = [], []
+    if region:
+        where.append("v.region = ?")
+        params.append(norm_region(region))
     if not is_admin:
         where.append("v.owner_user_id = ?")
         params.append(user["id"])
@@ -271,7 +325,31 @@ def list_contacts(conn, user: Dict, q: str = "", owner_id: Optional[int] = None)
     cur.execute(f"""SELECT v.*, u.name AS owner_name FROM vendor_contacts v LEFT JOIN users u ON u.id = v.owner_user_id
                     {('WHERE ' + ' AND '.join(where)) if where else ''}
                     ORDER BY LOWER(v.company_name), LOWER(COALESCE(v.contact_name, v.email)) LIMIT 5000""", params)
-    return [dict(r) for r in cur.fetchall()]
+    out = []
+    for r in cur.fetchall():
+        d = dict(r)
+        hint = guess_region(d.get("phone"), d.get("email"))
+        d["region_hint"] = hint if hint and hint != d.get("region") else ""   # "looks like an India contact"
+        out.append(d)
+    return out
+
+
+def region_counts(conn, user: Dict, owner_id: Optional[int] = None) -> Dict[str, int]:
+    """How many contacts each list holds (what the USA / India tabs show)."""
+    is_admin = "Admin" in (user.get("role") or "")
+    where, params = [], []
+    if not is_admin:
+        where.append("owner_user_id = ?")
+        params.append(user["id"])
+    elif owner_id:
+        where.append("owner_user_id = ?")
+        params.append(owner_id)
+    cur = conn.cursor()
+    cur.execute(f"SELECT region, COUNT(*) FROM vendor_contacts {('WHERE ' + ' AND '.join(where)) if where else ''} GROUP BY region", params)
+    counts = {r: 0 for r in REGIONS}
+    for reg, n in cur.fetchall():
+        counts[norm_region(reg)] = counts.get(norm_region(reg), 0) + int(n)
+    return counts
 
 
 def _contact_for_edit(cur, contact_id: int, user: Dict) -> Dict:
@@ -300,6 +378,14 @@ def update_contact(conn, contact_id: int, user: Dict, data: Dict) -> Dict:
         if data["status"] not in STATUSES:
             raise VendorError("Unknown status.")
         fields["status"] = data["status"]
+    if "region" in data:
+        new_region = norm_region(data.get("region"), default="")
+        if not new_region:
+            raise VendorError("Region must be USA or India.")
+        if new_region != row.get("region"):
+            if row["email"].lower() in _owner_emails(cur, row["owner_user_id"], new_region):
+                raise VendorError(f"{row['email']} is already in the {new_region} list.")
+            fields["region"] = new_region
     if fields:
         cur.execute(f"UPDATE vendor_contacts SET {', '.join(k + ' = ?' for k in fields)} WHERE id = ?",
                     list(fields.values()) + [contact_id])
@@ -315,49 +401,53 @@ def delete_contact(conn, contact_id: int, user: Dict) -> None:
     conn.commit()
 
 
-def add_contact(conn, owner_id: int, data: Dict, source: str = "manual") -> Tuple[Optional[int], str]:
-    """Add one contact; returns (id, '') or (None, reason)."""
+def add_contact(conn, owner_id: int, data: Dict, source: str = "manual", region: str = "USA") -> Tuple[Optional[int], str]:
+    """Add one contact to that region's list; returns (id, '') or (None, reason)."""
+    region = norm_region(region)
     row = {"company": str(data.get("company") or "").strip(), "name": str(data.get("name") or "").strip(),
            "email": str(data.get("email") or "").strip().lower(), "phone": str(data.get("phone") or "").strip(),
            "title": str(data.get("title") or "").strip(), "notes": str(data.get("notes") or "").strip()}
-    checked = validate([row], _owner_emails(conn.cursor(), owner_id))[0]
+    checked = validate([row], _owner_emails(conn.cursor(), owner_id, region))[0]
     if checked["status"] != "new":
-        return None, checked["reason"]
-    import_rows(conn, owner_id, [checked], source=source)
+        return None, (f"Already in your {region} list" if checked["status"] == "duplicate" else checked["reason"])
+    import_rows(conn, owner_id, [checked], source=source, region=region)
     cur = conn.cursor()
-    cur.execute("SELECT id FROM vendor_contacts WHERE owner_user_id = ? AND LOWER(email) = ?", (owner_id, checked["email"]))
+    cur.execute("SELECT id FROM vendor_contacts WHERE owner_user_id = ? AND region = ? AND LOWER(email) = ?",
+                (owner_id, region, checked["email"]))
     r = cur.fetchone()
     return (r[0] if r else None), ""
 
 
-def match(conn, owner_id: int, company: str = "", emails: Iterable[str] = ()) -> Dict:
-    """This recruiter's active contacts at the company of a job / pasted requirement.
-    Email domain first (most reliable), then the normalised company name."""
+def match(conn, owner_id: int, company: str = "", emails: Iterable[str] = (), region: str = "USA") -> Dict:
+    """This recruiter's active contacts (in that region's list) at the company of a job / pasted
+    requirement. Email domain first (most reliable), then the normalised company name."""
+    region = norm_region(region)
     cur = conn.cursor()
     domains = [d for d in {company_domain(e) for e in emails or []} if d]
     rows, how = [], ""
     if domains:
-        cur.execute(f"""SELECT * FROM vendor_contacts WHERE owner_user_id = ? AND status = 'active'
-                        AND email_domain IN ({", ".join(["?"] * len(domains))}) ORDER BY id""", (owner_id, *domains))
+        cur.execute(f"""SELECT * FROM vendor_contacts WHERE owner_user_id = ? AND region = ? AND status = 'active'
+                        AND email_domain IN ({", ".join(["?"] * len(domains))}) ORDER BY id""", (owner_id, region, *domains))
         rows, how = [dict(r) for r in cur.fetchall()], "domain"
     norm = normalize_company(company)
     if not rows and norm:
-        cur.execute("SELECT * FROM vendor_contacts WHERE owner_user_id = ? AND status = 'active' AND company_norm = ? ORDER BY id",
-                    (owner_id, norm))
+        cur.execute("SELECT * FROM vendor_contacts WHERE owner_user_id = ? AND region = ? AND status = 'active' AND company_norm = ? ORDER BY id",
+                    (owner_id, region, norm))
         rows, how = [dict(r) for r in cur.fetchall()], "company"
     label = rows[0]["company_name"] if rows else ""
-    return {"company": label, "matched_by": how, "contacts": rows}
+    return {"company": label, "matched_by": how, "contacts": rows, "region": region}
 
 
-def unknown_emails(conn, owner_id: int, emails: Iterable[str]) -> List[str]:
-    """Emails (e.g. found in a pasted requirement) that aren't in this recruiter's list at all."""
-    have = _owner_emails(conn.cursor(), owner_id)
+def unknown_emails(conn, owner_id: int, emails: Iterable[str], region: str = "USA") -> List[str]:
+    """Emails (e.g. found in a pasted requirement) that aren't in this recruiter's list of that region."""
+    have = _owner_emails(conn.cursor(), owner_id, region)
     return [e for e in dict.fromkeys((x or "").strip().lower() for x in emails or []) if e and e not in have]
 
 
-def contacts_for_bcc(conn, owner_id: int, contact_ids: Iterable, exclude_emails: Iterable[str] = ()) -> List[Dict]:
-    """The contacts a draft may BCC: only this recruiter's own, only active ones, never the To
-    address, at most MAX_BCC (in the order given)."""
+def contacts_for_bcc(conn, owner_id: int, contact_ids: Iterable, exclude_emails: Iterable[str] = (),
+                     region: str = "USA") -> List[Dict]:
+    """The contacts a draft may BCC: only this recruiter's own, only active ones, only from the
+    consultant's region list, never the To address, at most MAX_BCC (in the order given)."""
     ids = []
     for i in contact_ids or []:
         try:
@@ -368,8 +458,8 @@ def contacts_for_bcc(conn, owner_id: int, contact_ids: Iterable, exclude_emails:
     if not ids:
         return []
     cur = conn.cursor()
-    cur.execute(f"""SELECT * FROM vendor_contacts WHERE owner_user_id = ? AND status = 'active'
-                    AND id IN ({", ".join(["?"] * len(ids))})""", (owner_id, *ids))
+    cur.execute(f"""SELECT * FROM vendor_contacts WHERE owner_user_id = ? AND region = ? AND status = 'active'
+                    AND id IN ({", ".join(["?"] * len(ids))})""", (owner_id, norm_region(region), *ids))
     by_id = {r["id"]: dict(r) for r in cur.fetchall()}
     skip = {(e or "").strip().lower() for e in exclude_emails or []}
     out, seen = [], set()
@@ -381,11 +471,12 @@ def contacts_for_bcc(conn, owner_id: int, contact_ids: Iterable, exclude_emails:
     return out[:MAX_BCC]
 
 
-def vendor_index(conn, owner_id: int) -> Dict:
-    """This recruiter's active contacts grouped by email domain and by normalised company - built
-    once, then match_job() checks every job of a search without another query."""
+def vendor_index(conn, owner_id: int, region: str = "USA") -> Dict:
+    """This recruiter's active contacts of one region grouped by email domain and by normalised
+    company - built once, then match_job() checks every job of a search without another query."""
     cur = conn.cursor()
-    cur.execute("SELECT * FROM vendor_contacts WHERE owner_user_id = ? AND status = 'active' ORDER BY id", (owner_id,))
+    cur.execute("SELECT * FROM vendor_contacts WHERE owner_user_id = ? AND region = ? AND status = 'active' ORDER BY id",
+                (owner_id, norm_region(region)))
     idx = {"domains": {}, "companies": {}}
     for r in cur.fetchall():
         r = dict(r)
@@ -425,6 +516,27 @@ def mark_emailed(conn, contact_ids: Iterable[int], note: str) -> None:
     conn.cursor().execute(f"""UPDATE vendor_contacts SET last_emailed_at = CURRENT_TIMESTAMP, last_emailed_note = ?
                               WHERE id IN ({", ".join(["?"] * len(ids))})""", (note[:300], *ids))
     conn.commit()
+
+
+def export_xlsx(rows: List[Dict], region: str) -> bytes:
+    """One region's list as an Excel file (what the Vendors tab shows)."""
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, PatternFill
+    wb = Workbook()
+    ws = wb.active
+    ws.title = f"{norm_region(region)} Vendors"
+    ws.append(["Company", "Contact Name", "Email", "Phone", "Title", "Notes", "Status", "Last emailed"])
+    for c in ws[1]:
+        c.font = Font(bold=True, color="FFFFFF")
+        c.fill = PatternFill("solid", fgColor="1D4ED8")
+    for r in rows:
+        ws.append([r.get("company_name") or "", r.get("contact_name") or "", r.get("email") or "", r.get("phone") or "",
+                   r.get("title") or "", r.get("notes") or "", r.get("status") or "", str(r.get("last_emailed_at") or "")[:10]])
+    for col, w in zip("ABCDEFGH", (28, 24, 34, 18, 22, 40, 14, 14)):
+        ws.column_dimensions[col].width = w
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
 
 
 def template_xlsx() -> bytes:

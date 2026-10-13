@@ -97,7 +97,7 @@ try:
         page.fill("input[name=password]", PASSWORD)
         page.click("button[type=submit]")
         page.wait_for_url("**/dashboard**")
-        check("app.js?v=5.81.0" in page.content(), "cache-buster not bumped to 5.81.0")
+        check("app.js?v=5.82.0" in page.content(), "cache-buster not bumped to 5.82.0")
         page.wait_for_function("state.consultants && state.consultants.length >= 1", timeout=15000)
 
         # unknown company first: no vendor box
@@ -107,7 +107,7 @@ try:
         page.wait_for_timeout(1200)
         box_text = page.inner_text("#pd-vendor-box") if page.is_visible("#pd-vendor-box") else ""
         check("Known vendor" not in box_text, f"unknown company: no known-vendor line ({box_text!r})")
-        check("someone@unknown-co.example isn't in your vendors" in box_text, f"unknown email offers Save: {box_text!r}")
+        check("someone@unknown-co.example isn't in your USA vendors" in box_text, f"unknown email offers Save: {box_text!r}")
 
         # reopen -> the box is cleared; paste the known vendor's requirement
         page.click("#btn-cancel-paste-draft")
@@ -120,7 +120,7 @@ try:
         check("🤝 Known vendor: Vendor One Test Inc" in text and "3 contacts will be BCC'd" in text, f"box: {text}")
         check(page.input_value("#pd-email") == "poster@vendor-one.example", "To auto-filled from the text")
         check("poster@vendor-one.example" not in text.split("isn't")[0].split("BCC'd")[1], "the To address is not a BCC option")
-        check("newperson@vendor-one.example isn't in your vendors" in text, "Save offered for the new email")
+        check("newperson@vendor-one.example isn't in your USA vendors" in text, "Save offered for the new email")
 
         # untick Lata
         page.locator("#pd-vendor-box label", has_text="lata@vendor-one.example").locator("input").uncheck()
@@ -129,7 +129,7 @@ try:
         # save the new person -> becomes a ticked contact
         page.click("#pd-vendor-box .pd-save-vendor")
         page.wait_for_function("document.querySelector('#pd-vendor-box').innerText.includes('newperson@vendor-one.example') && "
-                               "!document.querySelector('#pd-vendor-box').innerText.includes(\"isn't in your vendors\")", timeout=10000)
+                               "!document.querySelector('#pd-vendor-box').innerText.includes(\"isn't in your USA vendors\")", timeout=10000)
         check(not page.locator("#pd-vendor-box label", has_text="lata@vendor-one.example").locator("input").is_checked(),
               "Lata stays unticked after the list is re-checked")
         check(page.input_value("#pd-title") == "Java Developer", f"title stops at the line end: {page.input_value('#pd-title')!r}")

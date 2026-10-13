@@ -677,20 +677,48 @@ def api_candidate_gmail_status(candidate_id):
 
 # --- US IT Job Searching & Live Scrapers ---
 
+def _job_region(job) -> str:
+    """A job's vendor list: India jobs -> India vendors, everything else -> USA vendors."""
+    return "India" if (job.get("country") or "").strip().lower() == "india" else "USA"
+
+
+def _cand_region(candidate_id) -> str:
+    """A consultant's vendor list follows their team (country India -> India, else USA)."""
+    cand = models.get_candidate_by_id(int(candidate_id)) if _int_or_none(candidate_id) else None
+    return regions.candidate_region(cand) if cand else "USA"
+
+
+def _vendor_region_for(user, data) -> str:
+    """Which list a Vendors-tab / Paste-window request is about: the consultant's region when one is
+    given (and visible to this user), else an explicit region, else the user's own team."""
+    cid = _int_or_none((data or {}).get("candidate_id"))
+    if cid and can_access_candidate(user, cid):
+        return _cand_region(cid)
+    explicit = vendors.norm_region((data or {}).get("region"), default="")
+    if explicit:
+        return explicit
+    vr = _view_regions(user)
+    return next(iter(vr)) if len(vr) == 1 else "USA"
+
+
 def _tag_known_vendors(jobs, user):
-    """job["vendor"] = {company, count} when the job's company is in this recruiter's own vendor list."""
+    """job["vendor"] = {company, count} when the job's company is in this recruiter's own vendor list
+    of the job's region (India jobs are checked against India vendors only)."""
     if not user or not jobs:
         return
+    idx = {}
     conn = models.get_db_connection()
     try:
-        idx = vendors.vendor_index(conn, user["id"])
+        for reg in {_job_region(j) for j in jobs if isinstance(j, dict)}:
+            idx[reg] = vendors.vendor_index(conn, user["id"], reg)
     finally:
         conn.close()
-    if not idx["domains"] and not idx["companies"]:
-        return
     for j in jobs:
         if isinstance(j, dict):
-            company, rows = vendors.match_job(idx, j)
+            ix = idx.get(_job_region(j))
+            if not ix or (not ix["domains"] and not ix["companies"]):
+                continue
+            company, rows = vendors.match_job(ix, j)
             if rows:
                 j["vendor"] = {"company": company, "count": len(rows)}
 
@@ -1126,7 +1154,7 @@ def api_paste_and_draft():
     conn = models.get_db_connection()
     try:
         bcc_contacts = vendors.contacts_for_bcc(conn, user["id"], data.get("bcc_contact_ids") or [],
-                                                exclude_emails=[recruiter_email])
+                                                exclude_emails=[recruiter_email], region=_cand_region(candidate_id))
     finally:
         conn.close()
 
@@ -1205,7 +1233,7 @@ def api_create_outreach_draft():
         conn = models.get_db_connection()
         try:
             to_email = (custom_to_email or job.get("recruiter_email") or "").strip()
-            bcc_contacts = vendors.bcc_for_job(vendors.vendor_index(conn, user["id"]), job, to_email)
+            bcc_contacts = vendors.bcc_for_job(vendors.vendor_index(conn, user["id"], _cand_region(candidate_id)), job, to_email)
         finally:
             conn.close()
 
@@ -1263,7 +1291,7 @@ def api_auto_vendor_drafts():
 
     conn = models.get_db_connection()
     try:
-        idx = vendors.vendor_index(conn, user["id"])
+        idx = vendors.vendor_index(conn, user["id"], regions.candidate_region(cand))
         cur = conn.cursor()
         cur.execute("SELECT COUNT(*) FROM vendor_auto_drafts WHERE candidate_id = ? AND created_at >= ?", (candidate_id, today))
         used = int(cur.fetchone()[0])
@@ -1425,7 +1453,7 @@ def _draft_extras(user, cand, job, to_email, version_id=None):
     bcc = []
     conn = models.get_db_connection()
     try:
-        bcc = [c["email"] for c in vendors.bcc_for_job(vendors.vendor_index(conn, user["id"]), job, to_email)]
+        bcc = [c["email"] for c in vendors.bcc_for_job(vendors.vendor_index(conn, user["id"], regions.candidate_region(cand)), job, to_email)]
     except Exception as ex:
         logger.warning(f"Vendor BCC preview failed: {ex}")
     finally:
@@ -3159,31 +3187,30 @@ def api_vendors():
     conn = models.get_db_connection()
     try:
         if request.method == "POST":
-            new_id, reason = vendors.add_contact(conn, user["id"], request.get_json(silent=True) or {})
+            body = request.get_json(silent=True) or {}
+            region = _vendor_region_for(user, body)
+            new_id, reason = vendors.add_contact(conn, user["id"], body, region=region)
             if not new_id:
                 return jsonify({"error": reason}), 400
-            return jsonify({"success": True, "id": new_id})
-        rows = vendors.list_contacts(conn, user, q=(request.args.get("q") or "").strip(),
-                                     owner_id=_int_or_none(request.args.get("owner")))
+            return jsonify({"success": True, "id": new_id, "region": region})
+        region = _vendor_region_for(user, {"region": request.args.get("region")})
+        owner = _int_or_none(request.args.get("owner"))
+        rows = vendors.list_contacts(conn, user, q=(request.args.get("q") or "").strip(), owner_id=owner, region=region)
+        counts = vendors.region_counts(conn, user, owner_id=owner)
     finally:
         conn.close()
+    if request.args.get("format") == "xlsx":
+        return send_file(io.BytesIO(vendors.export_xlsx(rows, region)), as_attachment=True,
+                         download_name=f"{region}_Vendor_Contacts.xlsx",
+                         mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
     is_admin = "Admin" in (user.get("role") or "")
-    if is_admin:
-        vr = _view_regions(user)
-        if len(vr) == 1:
-            conn = models.get_db_connection()
-            try:
-                team = {o for o in {r["owner_user_id"] for r in rows} if regions.user_region(conn, o) in vr}
-            finally:
-                conn.close()
-            rows = [r for r in rows if r["owner_user_id"] in team or r["owner_user_id"] == user["id"]]
     owners = sorted({(r["owner_user_id"], r.get("owner_name") or "") for r in rows}, key=lambda o: o[1].lower()) if is_admin else []
     for r in rows:
         r["mine"] = r["owner_user_id"] == user["id"]
         for k in ("last_emailed_at", "created_at"):
             if r.get(k) is not None:
                 r[k] = str(r[k])[:19]
-    return jsonify({"contacts": rows, "is_admin": is_admin,
+    return jsonify({"contacts": rows, "is_admin": is_admin, "region": region, "region_counts": counts,
                     "owners": [{"id": o[0], "name": o[1]} for o in owners],
                     "companies": len({r["company_norm"] for r in rows})})
 
@@ -3199,7 +3226,7 @@ def api_vendors_upload_preview():
         return jsonify({"error": "Choose an Excel or CSV file."}), 400
     conn = models.get_db_connection()
     try:
-        rows = vendors.preview(conn, user["id"], f.read(), f.filename)
+        rows = vendors.preview(conn, user["id"], f.read(), f.filename, region=_vendor_region_for(user, {"region": request.form.get("region")}))
     except vendors.VendorError as ex:
         return jsonify({"error": str(ex)}), 400
     finally:
@@ -3220,12 +3247,13 @@ def api_vendors_import():
         return jsonify({"error": "Nothing to import."}), 400
     conn = models.get_db_connection()
     try:
-        result = vendors.import_rows(conn, user["id"], [r for r in rows if isinstance(r, dict)])
+        region = _vendor_region_for(user, {"region": data.get("region")})
+        result = vendors.import_rows(conn, user["id"], [r for r in rows if isinstance(r, dict)], region=region)
     finally:
         conn.close()
     models.log_activity(user["id"], user["name"], "Imported Vendors", "Vendors", 0,
-                        f"{result['added']} vendor contacts from {str(data.get('filename') or 'upload')[:120]}")
-    return jsonify({"success": True, **result})
+                        f"{result['added']} {region} vendor contacts from {str(data.get('filename') or 'upload')[:120]}")
+    return jsonify({"success": True, "region": region, **result})
 
 
 @app.route("/api/vendors/template", methods=["GET"])
@@ -3270,8 +3298,9 @@ def api_vendors_match():
     conn = models.get_db_connection()
     try:
         emails = [str(e).strip().lower() for e in emails][:50]
-        m = vendors.match(conn, user["id"], company=str(data.get("company") or ""), emails=emails)
-        m["unknown_emails"] = vendors.unknown_emails(conn, user["id"], emails)
+        region = _vendor_region_for(user, data)
+        m = vendors.match(conn, user["id"], company=str(data.get("company") or ""), emails=emails, region=region)
+        m["unknown_emails"] = vendors.unknown_emails(conn, user["id"], emails, region=region)
     finally:
         conn.close()
     m["contacts"] = [{k: c.get(k) for k in ("id", "company_name", "contact_name", "email", "phone", "title")} for c in m["contacts"]]

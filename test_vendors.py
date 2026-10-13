@@ -98,7 +98,7 @@ check(models.get_db_connection().cursor().execute("SELECT COUNT(*) FROM vendor_c
 # the browser sends back only the new rows; the server re-checks (a forged bad row is not saved)
 rows = [row for row in d["rows"] if row["status"] == "new"] + [{"company": "", "email": "forged@gmail.com"}]
 r = client.post("/api/vendors/import", json={"rows": rows, "filename": "asha_vendors.xlsx"})
-check(r.get_json() == {"success": True, "added": 4, "duplicates": 0, "problems": 1}, f"import result {r.get_json()}")
+check(r.get_json() == {"success": True, "added": 4, "duplicates": 0, "problems": 1, "region": "USA"}, f"import result {r.get_json()}")
 
 # uploading the same file again: everything is already in the list
 r = client.post("/api/vendors/upload-preview", data={"file": (io.BytesIO(buf.getvalue()), "again.xlsx")}, content_type="multipart/form-data")

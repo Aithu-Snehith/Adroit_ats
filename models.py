@@ -515,6 +515,7 @@ def init_db():
         source TEXT,
         last_emailed_at TIMESTAMP,
         last_emailed_note TEXT,
+        region TEXT DEFAULT 'USA',
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     );
     """)
@@ -596,6 +597,11 @@ def init_db():
         regions.backfill(conn)          # existing users get a region once (from their consultants' countries)
     except Exception as ex:
         print("[WARN] region backfill:", ex)
+    try:
+        import vendors
+        vendors.backfill_regions(conn)  # existing vendor contacts -> USA / India list, once (phone / email / recruiter's team)
+    except Exception as ex:
+        print("[WARN] vendor region backfill:", ex)
     try:
         cursor.execute("CREATE INDEX IF NOT EXISTS ix_profile_education_norm ON profile_education (institution_norm)")
         conn.commit()
@@ -702,6 +708,13 @@ def migrate_db(conn):
     if "auto_reply_mode" not in u_cols:   # off / draft / send_safe (reply_inbox.py)
         try:
             cursor.execute("ALTER TABLE users ADD COLUMN auto_reply_mode TEXT DEFAULT 'draft'")
+        except Exception:
+            pass
+
+    # Vendor contacts: USA / India list (vendors.py). Existing rows are sorted by vendors.backfill_regions().
+    if "region" not in get_existing_cols("vendor_contacts"):
+        try:
+            cursor.execute("ALTER TABLE vendor_contacts ADD COLUMN region TEXT")
         except Exception:
             pass
 

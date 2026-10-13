@@ -88,8 +88,8 @@ try:
 
         # ---- Asha uploads
         page = open_vendors(browser, "asha")
-        check("app.js?v=5.81.0" in page.content(), "cache-buster not bumped to 5.81.0")
-        check(page.is_visible("#tab-vendors") and "No vendor contacts yet" in page.inner_text("#vendors-body"), "empty state")
+        check("app.js?v=5.82.0" in page.content(), "cache-buster not bumped to 5.82.0")
+        check(page.is_visible("#tab-vendors") and "vendor contacts yet" in page.inner_text("#vendors-body"), "empty state")
         check(not page.is_visible("#vendors-owner"), "recruiter has no Recruiter filter")
         check(page.get_attribute("#vendors-template", "href") == "/api/vendors/template", "template link")
         page.set_input_files("#vendors-file", xlsx)
@@ -107,7 +107,7 @@ try:
         kiran = page.locator("#vendors-body tr", has_text="kiran@vendor-one.example")
         check(kiran.locator(".vendor-notes").inner_text() == "Works for AT&T clients", "notes shown in the Vendors table")
         check("Notes" in page.text_content("#vendors-table thead"), "Notes column header")
-        check(page.inner_text("#vendors-count") == "3 contacts at 2 companies", f"count: {page.inner_text('#vendors-count')}")
+        check(page.inner_text("#vendors-count") == "USA list: 3 contacts at 2 companies", f"count: {page.inner_text('#vendors-count')}")
         check(not page.is_visible("#vendors-table th.vendors-owner-col"), "no Recruiter column for a recruiter")
         color = page.eval_on_selector("#vendors-body tr[data-id] td", "el => getComputedStyle(el).color")
         check(color != "rgb(255, 255, 255)", f"company text visible: {color}")
@@ -148,7 +148,7 @@ try:
 
         # ---- Ravi sees nothing of Asha's
         page = open_vendors(browser, "ravi")
-        check(page.evaluate(ROWS) == 0 and "No vendor contacts yet" in page.inner_text("#vendors-body"), "Ravi sees none of Asha's contacts")
+        check(page.evaluate(ROWS) == 0 and "vendor contacts yet" in page.inner_text("#vendors-body"), "Ravi sees none of Asha's contacts")
         page.close()
 
         # ---- admin sees all, with the Recruiter column + filter

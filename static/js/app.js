@@ -4532,7 +4532,7 @@ function jobExperienceBadge(exp) {
 // =========================================================================
 // Vendors: each recruiter's private vendor contacts (admins see everyone's)
 // =========================================================================
-const vendorsState = { contacts: [], isAdmin: false, preview: null, filename: '', timer: null, wired: false };
+const vendorsState = { contacts: [], isAdmin: false, preview: null, filename: '', timer: null, wired: false, region: '' };
 
 function vendorsWire() {
     if (vendorsState.wired) return;
@@ -4553,6 +4553,21 @@ function vendorsWire() {
     $('vf-save').addEventListener('click', vendorsSaveForm);
     $('vp-cancel').addEventListener('click', () => { vendorsState.preview = null; $('vendors-preview').style.display = 'none'; });
     $('vp-import').addEventListener('click', vendorsImport);
+    document.querySelectorAll('.vendors-region-tab').forEach(b => b.addEventListener('click', () => {
+        vendorsState.region = b.getAttribute('data-region');
+        document.getElementById('vendors-form').style.display = 'none';
+        vendorsState.preview = null;
+        document.getElementById('vendors-preview').style.display = 'none';
+        loadVendors();
+    }));
+}
+
+async function vendorsMoveRegion(id, region) {
+    const res = await fetch(`/api/vendors/${id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ region }) });
+    const data = await res.json();
+    if (!res.ok) { showToast(data.error || 'Could not move', 'error'); return; }
+    showToast(`Moved to your ${region} vendors`, 'success');
+    loadVendors();
 }
 
 async function loadVendors() {
@@ -4562,12 +4577,24 @@ async function loadVendors() {
     const params = new URLSearchParams();
     if (q) params.set('q', q);
     if (owner) params.set('owner', owner);
+    if (vendorsState.region) params.set('region', vendorsState.region);
     try {
         const res = await fetch('/api/vendors?' + params.toString());
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || 'Could not load vendors');
         vendorsState.contacts = data.contacts;
         vendorsState.isAdmin = data.is_admin;
+        vendorsState.region = data.region;
+        const counts = data.region_counts || {};
+        document.querySelectorAll('.vendors-region-tab').forEach(b => {
+            const r = b.getAttribute('data-region');
+            b.classList.toggle('on', r === data.region);
+            b.querySelector('.vrt-count').textContent = `(${counts[r] || 0})`;
+        });
+        const exp = new URLSearchParams(params);
+        exp.set('region', data.region);
+        exp.set('format', 'xlsx');
+        document.getElementById('vendors-export').href = '/api/vendors?' + exp.toString();
         const sel = document.getElementById('vendors-owner');
         if (data.is_admin) {
             sel.style.display = '';
@@ -4580,7 +4607,7 @@ async function loadVendors() {
         }
         const n = data.contacts.length;
         document.getElementById('vendors-count').textContent =
-            `${n} contact${n === 1 ? '' : 's'} at ${data.companies} compan${data.companies === 1 ? 'y' : 'ies'}`;
+            `${data.region} list: ${n} contact${n === 1 ? '' : 's'} at ${data.companies} compan${data.companies === 1 ? 'y' : 'ies'}`;
         renderVendors();
     } catch (err) {
         document.getElementById('vendors-count').textContent = err.message;
@@ -4592,7 +4619,7 @@ function renderVendors() {
     const showOwner = vendorsState.isAdmin;
     document.querySelectorAll('.vendors-owner-col').forEach(el => { el.style.display = showOwner ? '' : 'none'; });
     if (!vendorsState.contacts.length) {
-        body.innerHTML = `<tr><td colspan="9" style="text-align:center; color:#64748b; padding:24px;">No vendor contacts yet. Download the template, fill it in Excel and upload it - or add one contact at a time.</td></tr>`;
+        body.innerHTML = `<tr><td colspan="9" style="text-align:center; color:#64748b; padding:24px;">No ${escapeHtml(vendorsState.region || '')} vendor contacts yet. Download the template, fill it in Excel and upload it - or add one contact at a time.</td></tr>`;
         return;
     }
     const statuses = ['active', 'unsubscribed', 'bounced'];
@@ -4600,7 +4627,7 @@ function renderVendors() {
         <tr data-id="${c.id}">
             <td style="color:#0f172a; font-weight:600;">${escapeHtml(c.company_name)}</td>
             <td style="color:#0f172a;">${escapeHtml(c.contact_name || '')}${c.title ? `<div style="font-size:0.75rem; color:#64748b;">${escapeHtml(c.title)}</div>` : ''}</td>
-            <td style="color:#0f172a;">${escapeHtml(c.email)}</td>
+            <td style="color:#0f172a;">${escapeHtml(c.email)}${c.region_hint ? `<div class="vendor-region-hint" style="font-size:0.75rem; color:#92400e; margin-top:2px;">Looks like an ${escapeHtml(c.region_hint)} contact &middot; <a href="#" onclick="vendorsMoveRegion(${c.id}, '${c.region_hint}'); return false;">Move to ${escapeHtml(c.region_hint)}</a></div>` : ''}</td>
             <td style="color:#0f172a; white-space:nowrap;">${escapeHtml(c.phone || '')}</td>
             <td class="vendor-notes" title="${escapeHtml(c.notes || '')}" style="color:#475569; font-size:0.8rem; max-width:170px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${escapeHtml(c.notes || '')}</td>
             <td><select class="form-control vendor-status" style="padding:2px 6px; font-size:0.8rem; min-width:100px;" onchange="vendorsSetStatus(${c.id}, this.value)">
@@ -4627,6 +4654,7 @@ function vendorsOpenForm(id) {
     $('vf-phone').value = c ? (c.phone || '') : '';
     $('vf-title').value = c ? (c.title || '') : '';
     $('vf-notes').value = c ? (c.notes || '') : '';
+    $('vf-region').value = c ? (c.region || 'USA') : (vendorsState.region || 'USA');
     $('vendors-form').style.display = '';
     $('vf-company').focus();
 }
@@ -4635,15 +4663,16 @@ async function vendorsSaveForm() {
     const v = k => document.getElementById(k).value.trim();
     const id = v('vf-id');
     const body = id
-        ? { company_name: v('vf-company'), contact_name: v('vf-name'), phone: v('vf-phone'), title: v('vf-title'), notes: v('vf-notes') }
-        : { company: v('vf-company'), name: v('vf-name'), email: v('vf-email'), phone: v('vf-phone'), title: v('vf-title'), notes: v('vf-notes') };
+        ? { company_name: v('vf-company'), contact_name: v('vf-name'), phone: v('vf-phone'), title: v('vf-title'), notes: v('vf-notes'), region: v('vf-region') }
+        : { company: v('vf-company'), name: v('vf-name'), email: v('vf-email'), phone: v('vf-phone'), title: v('vf-title'), notes: v('vf-notes'), region: v('vf-region') };
     const res = await fetch(id ? `/api/vendors/${id}` : '/api/vendors', {
         method: id ? 'PUT' : 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
     });
     const data = await res.json();
     if (!res.ok) { showToast(data.error || 'Could not save', 'error'); return; }
     document.getElementById('vendors-form').style.display = 'none';
-    showToast(id ? 'Contact updated' : 'Contact added', 'success');
+    showToast(id ? 'Contact updated' : `Contact added to your ${data.region || v('vf-region')} vendors`, 'success');
+    vendorsState.region = v('vf-region');
     loadVendors();
 }
 
@@ -4668,13 +4697,14 @@ async function vendorsDelete(id) {
 async function vendorsUploadPreview(file) {
     const fd = new FormData();
     fd.append('file', file);
+    fd.append('region', vendorsState.region || 'USA');
     const res = await fetch('/api/vendors/upload-preview', { method: 'POST', body: fd });
     const data = await res.json();
     if (!res.ok) { showToast(data.error || 'Could not read that file', 'error'); return; }
     vendorsState.preview = data.rows;
     vendorsState.filename = data.filename;
     const k = data.counts;
-    document.getElementById('vp-filename').textContent = data.filename;
+    document.getElementById('vp-filename').textContent = `${data.filename} → your ${vendorsState.region || 'USA'} list`;
     document.getElementById('vp-counts').innerHTML =
         `<b style="color:#059669;">${k.new} new</b> &middot; <span style="color:#64748b;">${k.duplicate} already in your list / repeated</span> &middot; <span style="color:#b91c1c;">${k.problem} with a problem (skipped)</span>`;
     const label = { new: ['New', '#059669'], duplicate: ['Duplicate', '#64748b'], problem: ['Problem', '#b91c1c'] };
@@ -4694,14 +4724,14 @@ async function vendorsImport() {
     const btn = document.getElementById('vp-import');
     btn.disabled = true;
     const res = await fetch('/api/vendors/import', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ rows, filename: vendorsState.filename })
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ rows, filename: vendorsState.filename, region: vendorsState.region || 'USA' })
     });
     const data = await res.json();
     btn.disabled = false;
     if (!res.ok) { showToast(data.error || 'Import failed', 'error'); return; }
     vendorsState.preview = null;
     document.getElementById('vendors-preview').style.display = 'none';
-    showToast(`Imported ${data.added} vendor contact${data.added === 1 ? '' : 's'}`, 'success');
+    showToast(`Imported ${data.added} vendor contact${data.added === 1 ? '' : 's'} into your ${data.region || ''} list`, 'success');
     loadVendors();
 }
 
@@ -4709,7 +4739,7 @@ async function vendorsImport() {
 // =========================================================================
 // Paste Requirement & Draft: BCC the recruiter's own vendor contacts at that company
 // =========================================================================
-const pdVendor = { timer: null, seq: 0, contacts: [], unknown: [], company: '', max: 10, unticked: new Set() };
+const pdVendor = { timer: null, seq: 0, contacts: [], unknown: [], company: '', region: '', max: 10, unticked: new Set() };
 
 function pdVendorEmails() {
     const text = document.getElementById('pd-raw-text')?.value || '';
@@ -4740,7 +4770,8 @@ async function pdVendorCheck() {
     if (!emails.length && !company) { pdVendorReset(); return; }
     try {
         const res = await fetch('/api/vendors/match', {
-            method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ emails, company })
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ emails, company, candidate_id: document.getElementById('pd-consultant-select')?.value || null })
         });
         const data = await res.json();
         if (seq !== pdVendor.seq || !res.ok) return;   // a newer check is running
@@ -4748,6 +4779,7 @@ async function pdVendorCheck() {
         pdVendor.contacts = (data.contacts || []).filter(c => c.email.toLowerCase() !== to);
         pdVendor.unknown = data.unknown_emails || [];
         pdVendor.company = data.company || '';
+        pdVendor.region = data.region || '';
         pdVendor.max = data.max_bcc || 10;
         const companyInput = document.getElementById('pd-company');
         if (companyInput && !companyInput.value.trim() && pdVendor.company && pdVendor.contacts.length) companyInput.value = pdVendor.company;
@@ -4764,7 +4796,7 @@ function pdVendorRender() {
     const tickedIds = new Set(pdVendor.contacts.filter(c => !pdVendor.unticked.has(c.id)).slice(0, pdVendor.max).map(c => c.id));
     if (n) {
         const capped = n > pdVendor.max;
-        parts.push(`<div style="font-weight:700; color:#065f46; margin-bottom:6px;">🤝 Known vendor: ${escapeHtml(pdVendor.company)} &middot; <span id="pd-vendor-count"></span></div>
+        parts.push(`<div style="font-weight:700; color:#065f46; margin-bottom:6px;">🤝 Known vendor: ${escapeHtml(pdVendor.company)} (${escapeHtml(pdVendor.region || 'USA')} list) &middot; <span id="pd-vendor-count"></span></div>
             <div style="display:flex; flex-direction:column; gap:4px; max-height:170px; overflow:auto;">
             ${pdVendor.contacts.map(c => `<label style="display:flex; gap:8px; align-items:center; font-weight:400; text-transform:none; color:#0f172a; margin:0;">
                 <input type="checkbox" class="pd-bcc" value="${c.id}" ${tickedIds.has(c.id) ? 'checked' : ''}>
@@ -4775,8 +4807,8 @@ function pdVendorRender() {
     const company = (document.getElementById('pd-company')?.value || '').trim();
     pdVendor.unknown.forEach(e => {
         parts.push(`<div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-top:${parts.length ? 8 : 0}px; color:#0f172a;">
-            <span style="font-size:0.85rem;">${escapeHtml(e)} isn't in your vendors.</span>
-            <button type="button" class="btn btn-secondary btn-xs pd-save-vendor" data-email="${escapeHtml(e)}">➕ Save to my vendors</button></div>`);
+            <span style="font-size:0.85rem;">${escapeHtml(e)} isn't in your ${escapeHtml(pdVendor.region || 'USA')} vendors.</span>
+            <button type="button" class="btn btn-secondary btn-xs pd-save-vendor" data-email="${escapeHtml(e)}">➕ Save to my ${escapeHtml(pdVendor.region || 'USA')} vendors</button></div>`);
     });
     if (!parts.length) { box.innerHTML = ''; box.style.display = 'none'; return; }
     box.innerHTML = parts.join('');
@@ -4805,14 +4837,15 @@ function pdVendorSelectedIds() {
 async function pdVendorSave(email, company) {
     const res = await fetch('/api/vendors', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, company: company || pdVendor.company, notes: 'Saved from a pasted requirement' })
+        body: JSON.stringify({ email, company: company || pdVendor.company, notes: 'Saved from a pasted requirement',
+            candidate_id: document.getElementById('pd-consultant-select')?.value || null })
     });
     const data = await res.json();
     if (!res.ok) {
         showToast((data.error || 'Could not save') + (/company/i.test(data.error || '') ? ' - type the company first.' : ''), 'warning', 6000);
         return;
     }
-    showToast(`${email} saved to your vendors`, 'success');
+    showToast(`${email} saved to your ${data.region || ''} vendors`, 'success');
     pdVendorCheck();
 }
 
@@ -5005,7 +5038,7 @@ function initDraftOptimize() {
     $('do-optimized').addEventListener('input', () => { const c = optCache[optKey()]; if (c) c.edited = $('do-optimized').value; });
     $('btn-do-save').addEventListener('click', () => (optPanel.mode === 'job' ? jobOptimizeSaveAndDraft() : draftOptimizeSave()));
     $('btn-do-download').addEventListener('click', optimizeDownload);
-    $('pd-consultant-select')?.addEventListener('change', () => { if (pdResume.versionId) pdResumeReset(); pdConsultantChanged(); });
+    $('pd-consultant-select')?.addEventListener('change', () => { if (pdResume.versionId) pdResumeReset(); pdConsultantChanged(); pdVendorSchedule(); });
     rv.wire();
     $('pd-raw-text')?.addEventListener('input', () => { clearTimeout(pdState.readTimer); pdState.readTimer = setTimeout(pdRead, 1200); });
 }

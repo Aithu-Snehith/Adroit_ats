@@ -752,6 +752,7 @@
                         <div>
                             <h2>Vendors</h2>
                             <p id="vendors-subtitle">Your own vendor contacts - only you see them. When a requirement comes from one of these companies, its contacts are BCC'd on your draft.</p>
+                            <p style="font-size:0.82rem; color:#475569; margin-top:4px;">Two separate lists: US jobs only use USA vendors, India jobs only India vendors.</p>
                         </div>
                     </div>
                     <div style="display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin-bottom:12px;">
@@ -765,6 +766,14 @@
                         <button class="btn btn-secondary btn-sm" id="vendors-add-btn" type="button">+ Add contact</button>
                     </div>
 
+                    <div style="display:flex; gap:8px; align-items:center; margin:0 0 12px;">
+                        <button type="button" class="vendors-region-tab" data-region="USA" id="vendors-tab-usa" style="padding:7px 16px; border:1px solid #cbd5e1; border-radius:999px; background:#fff; font-weight:700; font-size:0.85rem; cursor:pointer;">USA vendors <span class="vrt-count"></span></button>
+                        <button type="button" class="vendors-region-tab" data-region="India" id="vendors-tab-india" style="padding:7px 16px; border:1px solid #cbd5e1; border-radius:999px; background:#fff; font-weight:700; font-size:0.85rem; cursor:pointer;">India vendors <span class="vrt-count"></span></button>
+                        <span style="flex:1"></span>
+                        <a class="btn btn-secondary btn-sm" id="vendors-export" href="/api/vendors?format=xlsx">Download this list (Excel)</a>
+                    </div>
+                    <style>.vendors-region-tab.on { background:#2563eb !important; color:#fff !important; border-color:#2563eb !important; }</style>
+
                     <div id="vendors-form" class="studio-card" style="display:none; margin-bottom:12px;">
                         <h3 class="card-title" id="vendors-form-title">Add contact</h3>
                         <input type="hidden" id="vf-id">
@@ -775,6 +784,7 @@
                             <input class="form-control" id="vf-phone" placeholder="Phone">
                             <input class="form-control" id="vf-title" placeholder="Title">
                             <input class="form-control" id="vf-notes" placeholder="Notes">
+                            <select class="form-control" id="vf-region" title="Which list this contact belongs to"><option value="USA">USA list</option><option value="India">India list</option></select>
                         </div>
                         <div style="margin-top:10px; display:flex; gap:8px;">
                             <button class="btn btn-primary btn-sm" id="vf-save" type="button">Save</button>
@@ -1482,7 +1492,7 @@
         window.VIEW_REGION = {{ view_region | tojson }};</script>
     <script src="/static/vendor/jszip.min.js"></script>
     <script src="/static/vendor/docx-preview.min.js"></script>
-    <script src="/static/js/app.js?v=5.81.0"></script>
+    <script src="/static/js/app.js?v=5.82.0"></script>
 
     <!-- Recruiter Management Inline Fallback: app.js defines all of these with toast-based
          feedback and no page reloads. These only fire if app.js somehow failed to load -
