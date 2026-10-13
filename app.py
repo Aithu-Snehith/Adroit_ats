@@ -41,14 +41,30 @@ import india_job_scrapers
 import sourcing_tracker
 import vendors
 import job_experience
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone, date as date_cls
+from flask.json.provider import DefaultJSONProvider
 import job_description_fetch
 from templates_bundle import EMBEDDED_LOGIN_HTML, EMBEDDED_DASHBOARD_HTML, EMBEDDED_STYLE_CSS, EMBEDDED_APP_JS
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+class _JSONProvider(DefaultJSONProvider):
+    """Dates go to the page as '2026-10-13 12:00:00' - the text SQLite returns and the screens slice.
+    On Postgres the driver returns datetime objects, which Flask would send as 'Tue, 13 Oct 2026 ...'
+    (the tracker showed 'Tue, 13 Oc' and the interview-date box came up empty)."""
+
+    @staticmethod
+    def default(o):
+        if isinstance(o, datetime):
+            return o.strftime("%Y-%m-%d %H:%M:%S")
+        if isinstance(o, date_cls):
+            return o.isoformat()
+        return DefaultJSONProvider.default(o)
+
+
 app = Flask(__name__)
+app.json = _JSONProvider(app)
 app.secret_key = config.SECRET_KEY
 app.permanent_session_lifetime = timedelta(days=30)   # "Keep me signed in" on the login page
 if config.USING_DEFAULT_SECRET_KEY and config.ENV == "production":
