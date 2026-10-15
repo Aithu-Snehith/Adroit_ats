@@ -45,7 +45,9 @@ _SKIP_SUBJECT = re.compile(r"\b(verify|verification|otp|password|receipt|invoice
 
 EXTRACT_SYSTEM = """You read one email from an IT consultant's inbox and decide if it is a JOB REQUIREMENT
 (a vendor / recruiter / client describing an open position and asking for candidates or resumes).
-Newsletters, job-board alerts, application confirmations, marketing and personal mail are NOT requirements.
+A recruiter's own message about a specific position IS a requirement even when a job board delivered it
+(e.g. a "Dice Private Email" - the job board's wrapper text around it does not change that).
+Newsletters, job-board alerts listing jobs, application confirmations, marketing and personal mail are NOT requirements.
 Return ONLY JSON:
 {"is_requirement": true/false, "title": "", "client": "", "vendor_company": "", "location": "",
  "employment_type": "C2C / W2 / 1099 / Full-time / Contract / unknown", "rate": "only if stated", "skills": ["..."],
@@ -113,8 +115,20 @@ def _set(conn, rid: int, **fields):
     conn.commit()
 
 
+# Job-board relay addresses: a recruiter writing to the consultant THROUGH the job board (Dice Private
+# Email comes from <random>@user.dice.com; replying to it reaches the recruiter).
+RELAY_DOMAINS = ("user.dice.com",)
+
+
+def is_relay(email_addr: str) -> bool:
+    d = (email_addr or "").rsplit("@", 1)[-1].lower()
+    return any(d == r or d.endswith("." + r) for r in RELAY_DOMAINS)
+
+
 def extract(p: Dict, full_text: str) -> Dict:
-    data, model = reply_inbox._ai(EXTRACT_SYSTEM, f"FROM: {p['from_name']} <{p['from_email']}>\nSUBJECT: {p['subject']}\n\nEMAIL:\n{full_text[:12000]}")
+    note = ("NOTE: this message was written by a recruiter and delivered through the job board's private messaging "
+            "(the sender address is the job board's relay, which forwards replies to the recruiter).\n") if is_relay(p["from_email"]) else ""
+    data, model = reply_inbox._ai(EXTRACT_SYSTEM, f"{note}FROM: {p['from_name']} <{p['from_email']}>\nSUBJECT: {p['subject']}\n\nEMAIL:\n{full_text[:12000]}")
     data["_model"] = model
     # a recruiter address only counts if it really appears in the email (or is the sender)
     rec = (data.get("recruiter_email") or "").strip().lower()
@@ -251,6 +265,22 @@ def _handle(conn, rid: int, cand: Dict, p: Dict, full_text: str, user_id: Option
                 + (f". Needs your input in Gmail: {'; '.join(x.strip('[]') for x in needs)}" if needs else "")
                 + (f". Sent to {plan['to']} as the job asks" if not in_thread else ""))
     return "drafted"
+
+
+RECHECKABLE = ("not_requirement", "filtered", "low_match")
+
+
+def recheck(conn, rid: int) -> Optional[int]:
+    """'Check again': a requirement that was skipped / judged not a requirement / low match is looked at
+    again on the next scan (as a fresh attempt). Returns its candidate id, or None if it can't be."""
+    cur = conn.cursor()
+    cur.execute("SELECT candidate_id, status FROM inbox_requirements WHERE id = ?", (rid,))
+    row = cur.fetchone()
+    if not row or row[1] not in RECHECKABLE:
+        return None
+    cur.execute("UPDATE inbox_requirements SET status = 'error', attempts = 0, reason = 'Checking again on the next scan' WHERE id = ?", (rid,))
+    conn.commit()
+    return row[0]
 
 
 def list_for(conn, candidate_ids: List[int], limit: int = 200) -> List[Dict]:

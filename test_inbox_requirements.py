@@ -96,7 +96,8 @@ def fake_generate(client, types, system, prompt, want_json, max_tokens):
     ai_calls.append(prompt[:200])
     if system == iq.EXTRACT_SYSTEM:
         low = prompt.lower()
-        if "hiring" not in low and "requirement" not in low:
+        # a recruiter's Dice Private Email: no "hiring" wording, but the relay note tells the AI what it is
+        if "hiring" not in low and "requirement" not in low and "job board's private messaging" not in low:
             return json.dumps({"is_requirement": False}), False, "stub"
         title = "Java Developer" if "java developer" in low else "DevOps SRE Engineer"
         return json.dumps({"is_requirement": True, "title": title, "client": "Virtusa", "location": "Hyderabad", "employment_type": "Full-time",
@@ -213,9 +214,33 @@ check(r["started"], f"scan started in the background: {r}")
 for t in list(app_module._req_scans.values()):
     t.join(30)
 check(any(x["message_id"] == "<req8@v8>" and x["status"] == "drafted" for x in client.get(f"/api/requirements?candidate_id={cid}").get_json()["requirements"]), "background scan drafted it")
+
+# ---- Dice Private Email: a recruiter's message relayed by Dice (<random>@user.dice.com) is a requirement
+check(iq.is_relay("f29-v06-6fz@user.dice.com") and not iq.is_relay("applyonline@dice.com"), "Dice relay address recognised")
+mail(9, "Risakihaka Reqtest <f29-v06-6fz@user.dice.com>", "Backend Developer on W2",
+     "This is a trusted Dice Private Email. Learn more in the Dice help center.\nHi, I have a Backend Developer role on W2 - AWS, Kubernetes. Interested?",
+     "<dice9@user.dice.com>")
+r = client.post("/api/requirements/scan", json={"candidate_id": cid}).get_json()
+for t in list(app_module._req_scans.values()):
+    t.join(30)
+rows = {x["message_id"]: x for x in client.get(f"/api/requirements?candidate_id={cid}").get_json()["requirements"]}
+check(rows.get("<dice9@user.dice.com>", {}).get("status") == "drafted", f"Dice Private Email drafted: {rows.get('<dice9@user.dice.com>')}")
+check(appended[-1]["To"] == "f29-v06-6fz@user.dice.com", f"draft replies through Dice's relay: {appended[-1]['To']}")
+
+# ---- Check again: a 'Not a requirement' email is read again
+friend = rows["<p5@friend>"]
+before = len(ai_calls)
+r = client.post(f"/api/requirements/{friend['id']}/recheck").get_json()
+check(r.get("started"), f"check again started: {r}")
+for t in list(app_module._req_scans.values()):
+    t.join(30)
+again = {x["message_id"]: x for x in client.get(f"/api/requirements?candidate_id={cid}").get_json()["requirements"]}["<p5@friend>"]
+check(len(ai_calls) == before + 1 and again["status"] == "not_requirement", f"re-read by the AI once: {len(ai_calls) - before} calls, {again['status']}")
+check(client.post(f"/api/requirements/{rows['<req8@v8>']['id']}/recheck").status_code == 400, "a drafted one can't be re-checked")
 with client.session_transaction() as s_:
     s_["user"] = {**OTHER, "email": "req-other@example.invalid"}
 check(client.get(f"/api/requirements?candidate_id={cid}").status_code == 404 and client.get("/api/requirements").get_json()["requirements"] == [], "other recruiters see nothing")
+check(client.post(f"/api/requirements/{friend['id']}/recheck").status_code == 404, "other recruiters can't re-check")
 
 # ---- the window (Edge)
 from playwright.sync_api import sync_playwright  # noqa: E402
@@ -238,17 +263,19 @@ try:
         page.fill("input[name=password]", PW)
         page.click("button[type=submit]")
         page.wait_for_url("**/dashboard**")
-        check("app.js?v=5.82.0" in page.content(), "cache-buster not bumped to 5.82.0")
+        check("app.js?v=5.83.0" in page.content(), "cache-buster not bumped to 5.83.0")
         page.wait_for_function("typeof state !== 'undefined' && state.consultants && state.consultants.length", timeout=15000)
         page.evaluate(f"openTracker({cid})")
         page.click("#trk-open-reqs")
         page.wait_for_selector("#rq-body tr[data-id]", timeout=10000)
         txt = page.inner_text("#rq-body")
-        check("Virtusa is Hiring" in txt and "Draft created" in txt and "78%" in txt and "Lunch" not in txt, f"drafts shown (default filter): {txt[:300]}")
+        check(page.input_value("#rq-status") == "" and "Virtusa is Hiring" in txt and "Draft created" in txt and "78%" in txt and "Lunch" in txt,
+              f"opens on All - drafts and skipped mail with their reasons: {txt[:300]}")
         check(page.locator("#rq-body a[href^='/api/optimized-resumes/']").count() >= 1, "tailored resume link")
-        page.select_option("#rq-status", "")
-        page.wait_for_function("document.getElementById('rq-body').innerText.includes('Lunch')", timeout=5000)
-        check("Low match" in page.inner_text("#rq-body") and "Not a requirement" in page.inner_text("#rq-body"), "all results")
+        check("Low match" in txt and "Not a requirement" in txt, "all results")
+        check(page.locator("#rq-body .rq-recheck").count() >= 1 and "Check again" in txt, "Check again offered on skipped mail")
+        page.select_option("#rq-status", "drafted")
+        page.wait_for_function("!document.getElementById('rq-body').innerText.includes('Lunch')", timeout=5000)
         page.screenshot(path=shot)
         browser.close()
 finally:

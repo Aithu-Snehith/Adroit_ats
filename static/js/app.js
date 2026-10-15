@@ -6174,8 +6174,10 @@ async function rqLoad() {
             <td><span style="display:inline-block; padding:2px 8px; border-radius:999px; font-weight:700; background:${RQ_COLORS[r.status] || '#f1f5f9'}; white-space:nowrap;">${escapeHtml(r.status_label)}</span></td>
             <td>${r.match_pct != null ? r.match_pct + '%' : '-'}</td>
             <td style="max-width:170px; word-break:break-all;">${r.resume_version_id ? `<a href="/api/optimized-resumes/${r.resume_version_id}/download">${escapeHtml(r.resume_filename || 'tailored resume')}</a>` : (r.status === 'drafted' ? '<span style="color:#94a3b8;">original</span>' : '-')}</td>
-            <td style="min-width:220px; color:#475569;">${escapeHtml(r.reason || '')}</td>
+            <td style="min-width:220px; color:#475569;">${escapeHtml(r.reason || '')}${['not_requirement', 'filtered', 'low_match'].includes(r.status)
+                ? `<div><button type="button" class="btn btn-secondary btn-xs rq-recheck" data-id="${r.id}" style="margin-top:4px;">↻ Check again</button></div>` : ''}</td>
         </tr>`).join('') : `<tr><td colspan="8" style="text-align:center; color:#64748b; padding:18px;">${want ? 'Nothing with this result yet - choose "All".' : 'No requirement emails checked yet - click "Scan Gmail now".'}</td></tr>`;
+    $('rq-body').querySelectorAll('.rq-recheck').forEach(b => b.addEventListener('click', () => rqRecheck(b)));
     clearTimeout(rq.poll);
     if (d.scanning && $('modal-reqs').style.display === 'flex') {
         $('rq-msg').textContent = 'Scanning Gmail and tailoring resumes... (about a minute per requirement)';
@@ -6183,6 +6185,16 @@ async function rqLoad() {
     } else if ($('rq-msg').textContent.startsWith('Scanning')) {
         $('rq-msg').textContent = 'Scan finished.';
     }
+}
+
+async function rqRecheck(btn) {
+    btn.disabled = true;
+    const res = await fetch(`/api/requirements/${btn.dataset.id}/recheck`, { method: 'POST' });
+    const d = await res.json().catch(() => ({}));
+    const msg = document.getElementById('rq-msg');
+    if (!res.ok) { msg.textContent = d.error || 'Could not check it again.'; btn.disabled = false; return; }
+    msg.textContent = d.started ? 'Checking it again - reading the email, then tailoring the resume (about a minute)...' : (d.message || '');
+    setTimeout(rqLoad, 3000);
 }
 
 async function rqScan() {

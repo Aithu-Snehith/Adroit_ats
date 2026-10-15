@@ -79,7 +79,7 @@ try:
         page.fill("input[name=password]", PASSWORD)
         page.click("button[type=submit]")
         page.wait_for_url("**/dashboard**")
-        check("app.js?v=5.82.0" in page.content(), "cache-buster not bumped to 5.82.0")
+        check("app.js?v=5.83.0" in page.content(), "cache-buster not bumped to 5.83.0")
         page.click("a.nav-item[data-tab=candidates]")
         page.wait_for_selector(".btn-disconnect-gmail", timeout=15000)
         body = page.inner_text("#consultants-table-body")

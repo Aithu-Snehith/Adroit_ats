@@ -1960,6 +1960,33 @@ def api_requirements_scan():
     return jsonify({"started": True, "consultants": len(with_gmail)})
 
 
+@app.route("/api/requirements/<int:req_id>/recheck", methods=["POST"])
+def api_requirements_recheck(req_id):
+    """'Check again' on a requirement email that was skipped or judged not a requirement: it is re-read
+    (AI again) and, if it is one, tailored and drafted - a scan of that consultant starts now."""
+    user = current_user()
+    if not user:
+        return jsonify({"error": "Login required"}), 401
+    conn = models.get_db_connection()
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT candidate_id FROM inbox_requirements WHERE id = ?", (req_id,))
+        row = cur.fetchone()
+        if not row or not _tracker_candidate_ids(user, row[0]):
+            return jsonify({"error": "Not found"}), 404
+        cid = inbox_requirements.recheck(conn, req_id)
+    finally:
+        conn.close()
+    if not cid:
+        return jsonify({"error": "Only skipped, not-a-requirement or low-match emails can be checked again."}), 400
+    if cid in _req_scans:
+        return jsonify({"started": False, "message": "A scan is already running - it will be checked on the next one."})
+    t = threading.Thread(target=_run_requirement_scan, args=([cid],), daemon=True)
+    _req_scans[cid] = t
+    t.start()
+    return jsonify({"started": True})
+
+
 def _reply_check_loop(minutes: float):
     """Every few minutes, check every consultant's Gmail for new recruiter replies (needs the server
     awake - a sleeping free Render instance pauses it; the "Check replies" buttons still work)."""
