@@ -6137,7 +6137,7 @@ async function rpCheck() {
 // =========================================================================
 // Requirements from Gmail (inbox_requirements.py): requirement email -> tailored resume -> draft reply.
 // =========================================================================
-const rq = { wired: false, poll: null };
+const rq = { wired: false, poll: null, recheckId: null, recheckUntil: 0 };
 const RQ_COLORS = { drafted: '#dcfce7', drafted_input: '#fef9c3', low_match: '#fef3c7', not_requirement: '#f1f5f9', filtered: '#f1f5f9', error: '#fee2e2', checking: '#e0f2fe' };
 
 function openRequirements(candId) {
@@ -6179,7 +6179,17 @@ async function rqLoad() {
         </tr>`).join('') : `<tr><td colspan="8" style="text-align:center; color:#64748b; padding:18px;">${want ? 'Nothing with this result yet - choose "All".' : 'No requirement emails checked yet - click "Scan Gmail now".'}</td></tr>`;
     $('rq-body').querySelectorAll('.rq-recheck').forEach(b => b.addEventListener('click', () => rqRecheck(b)));
     clearTimeout(rq.poll);
-    if (d.scanning && $('modal-reqs').style.display === 'flex') {
+    // "Check again": keep refreshing until that email has its new result (the scan may run on another server worker)
+    const waiting = rq.recheckId && Date.now() < rq.recheckUntil &&
+        (d.requirements || []).some(r => r.id === rq.recheckId && (r.status === 'checking' || (r.status === 'error' && !r.attempts)));
+    if (rq.recheckId && !waiting) {
+        const r = (d.requirements || []).find(x => x.id === rq.recheckId);
+        if (r) $('rq-msg').textContent = `Checked again: ${r.status_label}.`;
+        rq.recheckId = null;
+    }
+    if (waiting && $('modal-reqs').style.display === 'flex') {
+        rq.poll = setTimeout(rqLoad, 6000);
+    } else if (d.scanning && $('modal-reqs').style.display === 'flex') {
         $('rq-msg').textContent = 'Scanning Gmail and tailoring resumes... (about a minute per requirement)';
         rq.poll = setTimeout(rqLoad, 8000);
     } else if ($('rq-msg').textContent.startsWith('Scanning')) {
@@ -6194,6 +6204,8 @@ async function rqRecheck(btn) {
     const msg = document.getElementById('rq-msg');
     if (!res.ok) { msg.textContent = d.error || 'Could not check it again.'; btn.disabled = false; return; }
     msg.textContent = d.started ? 'Checking it again - reading the email, then tailoring the resume (about a minute)...' : (d.message || '');
+    rq.recheckId = parseInt(btn.dataset.id);
+    rq.recheckUntil = Date.now() + 4 * 60 * 1000;
     setTimeout(rqLoad, 3000);
 }
 

@@ -120,20 +120,43 @@ def _set(conn, rid: int, **fields):
 RELAY_DOMAINS = ("user.dice.com",)
 
 
+RELAY_BOARD_DOMAINS = ("dice.com",)      # addresses of the job board itself - never the recruiter
+
+
 def is_relay(email_addr: str) -> bool:
     d = (email_addr or "").rsplit("@", 1)[-1].lower()
     return any(d == r or d.endswith("." + r) for r in RELAY_DOMAINS)
 
 
+def _board_address(email_addr: str) -> bool:
+    d = (email_addr or "").rsplit("@", 1)[-1].lower()
+    return any(d == r or d.endswith("." + r) for r in RELAY_BOARD_DOMAINS)
+
+
+def recruiter_address_in(full_text: str) -> str:
+    """The recruiter's own address written in a relayed email (usually the signature: 'E: risa@techdigitalcorp.com')."""
+    import vendors
+    for e in vendors.find_emails(full_text):
+        if not _board_address(e):
+            return e
+    return ""
+
+
 def extract(p: Dict, full_text: str) -> Dict:
+    relay = is_relay(p["from_email"])
     note = ("NOTE: this message was written by a recruiter and delivered through the job board's private messaging "
-            "(the sender address is the job board's relay, which forwards replies to the recruiter).\n") if is_relay(p["from_email"]) else ""
+            "(the sender address is the job board's relay). For recruiter_email give the recruiter's OWN address from "
+            "the email (e.g. the signature), not the relay.\n") if relay else ""
     data, model = reply_inbox._ai(EXTRACT_SYSTEM, f"{note}FROM: {p['from_name']} <{p['from_email']}>\nSUBJECT: {p['subject']}\n\nEMAIL:\n{full_text[:12000]}")
     data["_model"] = model
     # a recruiter address only counts if it really appears in the email (or is the sender)
     rec = (data.get("recruiter_email") or "").strip().lower()
     if not rec or (rec not in full_text.lower() and rec != p["from_email"]):
         rec = p.get("reply_to") or p["from_email"]
+    # A job-board relay (Dice Private Email): answer the recruiter's own address when the email gives one -
+    # the draft then goes straight to them; without one, the relay still forwards it.
+    if relay and (is_relay(rec) or _board_address(rec)):
+        rec = recruiter_address_in(full_text) or rec
     data["recruiter_email"] = rec
     return data
 
@@ -281,6 +304,14 @@ def recheck(conn, rid: int) -> Optional[int]:
     cur.execute("UPDATE inbox_requirements SET status = 'error', attempts = 0, reason = 'Checking again on the next scan' WHERE id = ?", (rid,))
     conn.commit()
     return row[0]
+
+
+def note_scan_failure(conn, cand_id: int, problem: str) -> None:
+    """A scan couldn't open Gmail: emails waiting to be checked again say why (instead of waiting silently)."""
+    cur = conn.cursor()
+    cur.execute("""UPDATE inbox_requirements SET reason = ? WHERE candidate_id = ? AND status = 'error' AND COALESCE(attempts, 0) = 0""",
+                (f"Not checked yet - {problem[:250]}. It will be tried again on the next scan.", cand_id))
+    conn.commit()
 
 
 def list_for(conn, candidate_ids: List[int], limit: int = 200) -> List[Dict]:

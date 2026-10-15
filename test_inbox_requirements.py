@@ -218,14 +218,18 @@ check(any(x["message_id"] == "<req8@v8>" and x["status"] == "drafted" for x in c
 # ---- Dice Private Email: a recruiter's message relayed by Dice (<random>@user.dice.com) is a requirement
 check(iq.is_relay("f29-v06-6fz@user.dice.com") and not iq.is_relay("applyonline@dice.com"), "Dice relay address recognised")
 mail(9, "Risakihaka Reqtest <f29-v06-6fz@user.dice.com>", "Backend Developer on W2",
-     "This is a trusted Dice Private Email. Learn more in the Dice help center.\nHi, I have a Backend Developer role on W2 - AWS, Kubernetes. Interested?",
+     "This is a trusted Dice Private Email. Learn more in the Dice help center.\nHi, I have a Backend Developer role on W2 - AWS, Kubernetes. Interested?"
+     "\nThanks and Regards,\nRisakihaka Reqtest | US IT Recruiter | TechDigital Test\nP: (612) 555-0100 | E: risa@techdigital-test.example\n"
+     "You have received this message because you have a profile on Dice. Questions: support@dice.com",
      "<dice9@user.dice.com>")
 r = client.post("/api/requirements/scan", json={"candidate_id": cid}).get_json()
 for t in list(app_module._req_scans.values()):
     t.join(30)
 rows = {x["message_id"]: x for x in client.get(f"/api/requirements?candidate_id={cid}").get_json()["requirements"]}
 check(rows.get("<dice9@user.dice.com>", {}).get("status") == "drafted", f"Dice Private Email drafted: {rows.get('<dice9@user.dice.com>')}")
-check(appended[-1]["To"] == "f29-v06-6fz@user.dice.com", f"draft replies through Dice's relay: {appended[-1]['To']}")
+check(appended[-1]["To"] == "risa@techdigital-test.example" and appended[-1]["In-Reply-To"] == "<dice9@user.dice.com>",
+      f"draft goes to the recruiter's own address from the signature (not Dice's relay), in the same thread: {appended[-1]['To']}")
+check(iq.recruiter_address_in("Questions: support@dice.com") == "", "Dice's own addresses are never the recruiter")
 
 # ---- Check again: a 'Not a requirement' email is read again
 friend = rows["<p5@friend>"]
@@ -237,6 +241,23 @@ for t in list(app_module._req_scans.values()):
 again = {x["message_id"]: x for x in client.get(f"/api/requirements?candidate_id={cid}").get_json()["requirements"]}["<p5@friend>"]
 check(len(ai_calls) == before + 1 and again["status"] == "not_requirement", f"re-read by the AI once: {len(ai_calls) - before} calls, {again['status']}")
 check(client.post(f"/api/requirements/{rows['<req8@v8>']['id']}/recheck").status_code == 400, "a drafted one can't be re-checked")
+
+
+class BrokenIMAP(FakeIMAP):
+    def login(self, u, p):
+        raise OSError("Gmail is busy")
+
+
+iq.imaplib.IMAP4_SSL = BrokenIMAP
+client.post(f"/api/requirements/{friend['id']}/recheck")
+for t in list(app_module._req_scans.values()):
+    t.join(30)
+broken = {x["message_id"]: x for x in client.get(f"/api/requirements?candidate_id={cid}").get_json()["requirements"]}["<p5@friend>"]
+check("Gmail is busy" in (broken["reason"] or "") and "tried again" in broken["reason"], f"Gmail failure shown on the email: {broken['reason']!r}")
+iq.imaplib.IMAP4_SSL = FakeIMAP
+client.post("/api/requirements/scan", json={"candidate_id": cid})   # Gmail back: the waiting email gets its result
+for t in list(app_module._req_scans.values()):
+    t.join(30)
 with client.session_transaction() as s_:
     s_["user"] = {**OTHER, "email": "req-other@example.invalid"}
 check(client.get(f"/api/requirements?candidate_id={cid}").status_code == 404 and client.get("/api/requirements").get_json()["requirements"] == [], "other recruiters see nothing")
@@ -263,7 +284,7 @@ try:
         page.fill("input[name=password]", PW)
         page.click("button[type=submit]")
         page.wait_for_url("**/dashboard**")
-        check("app.js?v=5.83.0" in page.content(), "cache-buster not bumped to 5.83.0")
+        check("app.js?v=5.84.0" in page.content(), "cache-buster not bumped to 5.84.0")
         page.wait_for_function("typeof state !== 'undefined' && state.consultants && state.consultants.length", timeout=15000)
         page.evaluate(f"openTracker({cid})")
         page.click("#trk-open-reqs")

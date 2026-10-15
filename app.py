@@ -1916,6 +1916,10 @@ def _run_requirement_scan(cand_ids):
                     inbox_requirements.scan_candidate(conn, cand)
                 except Exception as ex:
                     logger.warning(f"Requirement scan for {cid} failed: {ex}")
+                    try:
+                        inbox_requirements.note_scan_failure(conn, cid, str(ex))
+                    except Exception:
+                        pass
     finally:
         conn.close()
         for cid in cand_ids:
