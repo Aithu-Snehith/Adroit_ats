@@ -232,7 +232,8 @@ def _handle(conn, rid: int, cand: Dict, p: Dict, full_text: str, user_id: Option
         return "errors"
     data = extract(p, full_text)
     if not data.get("is_requirement"):
-        _set(conn, rid, status="not_requirement", reason="The AI read it as not a job requirement.", ai_model=data.get("_model"))
+        _set(conn, rid, status="not_requirement", ai_model=data.get("_model"),
+             reason=f"The AI read it as not a job requirement (it read {len(full_text.strip()):,} characters of the email).")
         return "not_requirement"
     title = (data.get("title") or p["subject"] or "Requirement")[:200]
     company = (data.get("client") or data.get("vendor_company") or p["from_email"].rsplit("@", 1)[-1])[:200]

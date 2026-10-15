@@ -104,10 +104,15 @@ def _text_of(msg) -> str:
             plain = text
         elif ctype == "text/html" and htm is None:
             htm = text
-    if plain is None and htm is not None:
-        t = re.sub(r"(?is)<(script|style).*?</\1>", "", htm)
-        t = re.sub(r"(?i)<br\s*/?>|</p>|</div>", "\n", t)
-        plain = html.unescape(re.sub(r"<[^>]+>", "", t))
+    if htm is not None:
+        t = re.sub(r"(?is)<(script|style|head).*?</\1>", "", htm)
+        t = re.sub(r"(?i)<br\s*/?>|</p>|</div>|</tr>|</li>|</h\d>", "\n", t)
+        t = html.unescape(re.sub(r"<[^>]+>", "", t))
+        t = re.sub(r"\n[ \t\r\f\v]*\n(\s*\n)+", "\n\n", re.sub(r"[ \t\xa0]+", " ", t)).strip()
+        # Use the HTML when it holds clearly more of the message: job boards (e.g. a Dice Private Email)
+        # send a short plain-text stub while the recruiter's message, job details and signature are HTML only.
+        if plain is None or len(t) > max(2 * len(plain.strip()), len(plain.strip()) + 300):
+            plain = t
     return plain or ""
 
 

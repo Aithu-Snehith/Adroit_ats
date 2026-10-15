@@ -33,6 +33,7 @@ config.DATABASE_URL = ""
 import docx  # noqa: E402
 import app as app_module  # noqa: E402
 import inbox_requirements as iq  # noqa: E402
+import reply_inbox  # noqa: E402
 import models  # noqa: E402
 import resume_bot  # noqa: E402
 
@@ -47,7 +48,7 @@ def check(cond, msg):
 INBOX, appended, searches, fetches, selected = {}, [], [], [], []
 
 
-def mail(n, frm, subject, body, msg_id, reply_to=""):
+def mail(n, frm, subject, body, msg_id, reply_to="", html_body=""):
     m = EmailMessage()
     m["From"], m["To"], m["Subject"] = frm, "visakh.reqtest@gmail.example", subject
     m["Date"] = "Mon, 12 Oct 2026 07:00:00 +0000"
@@ -55,6 +56,8 @@ def mail(n, frm, subject, body, msg_id, reply_to=""):
     if reply_to:
         m["Reply-To"] = reply_to
     m.set_content(body)
+    if html_body:
+        m.add_alternative(html_body, subtype="html")
     INBOX[str(n).encode()] = m.as_bytes()
 
 
@@ -217,11 +220,19 @@ check(any(x["message_id"] == "<req8@v8>" and x["status"] == "drafted" for x in c
 
 # ---- Dice Private Email: a recruiter's message relayed by Dice (<random>@user.dice.com) is a requirement
 check(iq.is_relay("f29-v06-6fz@user.dice.com") and not iq.is_relay("applyonline@dice.com"), "Dice relay address recognised")
+# like the real one: a short plain-text stub; the recruiter's message, job and signature are in the HTML only
 mail(9, "Risakihaka Reqtest <f29-v06-6fz@user.dice.com>", "Backend Developer on W2",
-     "This is a trusted Dice Private Email. Learn more in the Dice help center.\nHi, I have a Backend Developer role on W2 - AWS, Kubernetes. Interested?"
-     "\nThanks and Regards,\nRisakihaka Reqtest | US IT Recruiter | TechDigital Test\nP: (612) 555-0100 | E: risa@techdigital-test.example\n"
-     "You have received this message because you have a profile on Dice. Questions: support@dice.com",
-     "<dice9@user.dice.com>")
+     "This is a trusted Dice Private Email. Learn more in the Dice help center.",
+     "<dice9@user.dice.com>",
+     html_body="<html><head><style>p{margin:0}</style></head><body><p>This is a trusted Dice Private Email.</p>"
+               "<p>Hi Abhinov,</p><p>I have a Backend Developer role on W2 - AWS, Kubernetes.</p>"
+               "<p><b>What are the top 3 skills required for this role?</b><br>1. Java<br>2. Spring Boot &amp; Microservices<br>3. RESTful API Development</p>"
+               "<p>Thanks and Regards,<br><b>Risakihaka Reqtest</b> | US IT Recruiter | TechDigital Test<br>"
+               "P: (612) 555-0100 | E: <a href='mailto:risa@techdigital-test.example'>risa@techdigital-test.example</a></p>"
+               "<p>You have received this message because you have a profile on Dice. Questions: support@dice.com</p></body></html>")
+body9 = reply_inbox._text_of(email.message_from_bytes(INBOX[b"9"]))
+check("Spring Boot & Microservices" in body9 and "risa@techdigital-test.example" in body9 and "<p>" not in body9 and "margin" not in body9,
+      f"the HTML body is read when the plain text is only a stub: {body9[:200]!r}")
 r = client.post("/api/requirements/scan", json={"candidate_id": cid}).get_json()
 for t in list(app_module._req_scans.values()):
     t.join(30)
