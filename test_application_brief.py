@@ -189,6 +189,7 @@ class FakeIMAP:
 
 
 iq.imaplib.IMAP4_SSL = FakeIMAP
+iq.AUTO_DRAFT = True      # this part checks the automatic-draft mode (Review first: test_requirement_review_browser)
 models.save_resume_file(cid, "Visakh_Resume.docx", buf.getvalue())
 resume_bot.optimize_resume_for_jd = lambda *a, **k: {"ai_powered": True, "initial_match_percentage": 82, "optimized": True,
                                                       "docx_base64": base64.b64encode(buf.getvalue()).decode(), "mandatory_matched_skills": ["Terraform"]}
@@ -234,7 +235,7 @@ try:
         page.fill("input[name=password]", PW)
         page.click("button[type=submit]")
         page.wait_for_url("**/dashboard**")
-        check("app.js?v=5.84.0" in page.content(), "cache-buster not bumped to 5.84.0")
+        check("app.js?v=5.85.0" in page.content(), "cache-buster not bumped to 5.85.0")
         page.wait_for_function("typeof state !== 'undefined' && state.consultants && state.consultants.length", timeout=15000)
         page.evaluate(f"openAiCopilotModal({cid}, {job_id}, {{ jdText: {json.dumps(JD)}, versionId: {vid} }})")
         page.wait_for_function("document.getElementById('copilot-body').value.includes('Infrastructure challenge')", timeout=15000)

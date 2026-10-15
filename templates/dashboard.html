@@ -1338,7 +1338,7 @@
                 <div style="display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin-bottom:8px;">
                     <select id="rq-consultant" class="form-control" style="max-width:240px;"></select>
                     <select id="rq-status" class="form-control" style="max-width:220px;">
-                        <option value="" selected>All</option><option value="drafted">Drafts created</option><option value="drafted_input">Drafts that need your input</option><option value="low_match">Low match</option>
+                        <option value="" selected>All</option><option value="review">Ready to review</option><option value="drafted">Drafts created</option><option value="drafted_input">Drafts that need your input</option><option value="low_match">Low match</option>
                         <option value="not_requirement">Not a requirement</option><option value="filtered">Skipped</option><option value="error">Problems</option>
                     </select>
                     <button type="button" class="btn btn-primary btn-sm" id="rq-scan">📥 Scan Gmail now</button>
@@ -1492,7 +1492,7 @@
         window.VIEW_REGION = {{ view_region | tojson }};</script>
     <script src="/static/vendor/jszip.min.js"></script>
     <script src="/static/vendor/docx-preview.min.js"></script>
-    <script src="/static/js/app.js?v=5.84.0"></script>
+    <script src="/static/js/app.js?v=5.85.0"></script>
 
     <!-- Recruiter Management Inline Fallback: app.js defines all of these with toast-based
          feedback and no page reloads. These only fire if app.js somehow failed to load -

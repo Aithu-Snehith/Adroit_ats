@@ -1004,7 +1004,8 @@ async function createJobDraft(jobId, candId, customToEmail = '', btnElement = nu
                 custom_to_email: customToEmail,
                 optimized_resume_id: optimizedResumeId,
                 custom_subject: custom.subject || '',
-                custom_body: custom.body || ''
+                custom_body: custom.body || '',
+                requirement_id: custom.requirementId || null
             })
         });
 
@@ -5047,7 +5048,8 @@ function initDraftOptimize() {
 // was brought back (nothing to run).
 async function openOptimizePanel(opts) {
     const $ = id => document.getElementById(id);
-    Object.assign(optPanel, { mode: opts.mode, candId: opts.candId, jobId: opts.jobId || null, emailInput: opts.emailInput || null, saved: null, savedText: '' });
+    Object.assign(optPanel, { mode: opts.mode, candId: opts.candId, jobId: opts.jobId || null, emailInput: opts.emailInput || null, saved: null, savedText: '',
+                              requirement: opts.requirement || null });
     optPanel.runSeq++;               // anything still running for the previous window is now stale
     rv.reset();
     rv.loadOriginal(opts.candId);
@@ -5062,10 +5064,11 @@ async function openOptimizePanel(opts) {
     $('do-jd').value = opts.jdText || '';
     $('do-jd-wrap').style.display = opts.mode === 'job' ? '' : 'none';
     $('do-title').textContent = opts.title ? `⚡ Optimize Resume - ${opts.title}` : '⚡ Optimize Resume for this Requirement';
-    $('btn-do-save').innerHTML = opts.mode === 'job' ? '✉️ Save &amp; Create Draft' : '💾 Save &amp; use in this draft';
+    $('btn-do-save').innerHTML = opts.requirement ? '✉️ Create Draft (reply in their thread)' : (opts.mode === 'job' ? '✉️ Save &amp; Create Draft' : '💾 Save &amp; use in this draft');
     $('btn-do-download').style.display = 'none';
     $('modal-draft-optimize').style.display = 'flex';
     if (await optRestore(opts)) return true;
+    if (opts.requirement) { await rqShowOriginal(); return true; }   // no changes were needed: the original resume goes
     if (opts.mode === 'job' && !opts.jdText) return false;     // the job's JD is still loading (jobOptimizeOpen)
     draftOptimizeRun(true);
     return false;
@@ -5121,8 +5124,43 @@ async function optRestore(opts) {
     $('btn-do-download').style.display = '';
     $('btn-do-reoptimize').disabled = false;
     if (($('do-jd').value || '').trim().length < 30) $('do-jd').value = opts.jdText || opts.summary || '';
-    doEmailGenerate();
+    if (optPanel.requirement) {
+        $('do-status').innerHTML = `<b>Review before the draft is created</b> - the resume tailored for this requirement (changes in green) and the reply below. Edit either, then click <b>Create Draft</b>.`;
+        rqFillEmail();
+    } else {
+        doEmailGenerate();
+    }
     return true;
+}
+
+// Review of a requirement whose resume needed no changes: the original Word file is shown and attached.
+async function rqShowOriginal() {
+    const $ = id => document.getElementById(id);
+    const seq = optPanel.runSeq;
+    let text = '';
+    try { text = ((await (await fetch(`/api/consultants/${optPanel.candId}`)).json()).resume_text || '').trim(); } catch (e) { /* shown empty */ }
+    if (seq !== optPanel.runSeq) return;
+    $('do-original').value = text;
+    $('do-optimized').value = text;
+    pdResume.result = { optimized: true, requirement_original: true, updated_resume_text: text, format_preserved: false };
+    pdResume.candId = optPanel.candId;
+    await rv.showResult({ optimized: false, updated_resume_text: text }, () => seq !== optPanel.runSeq);
+    rv.text = text;
+    $('do-status').innerHTML = '<b>Review before the draft is created</b> - no changes were needed, so the consultant\'s original resume will be attached. Check the reply below, then click <b>Create Draft</b>.';
+    $('btn-do-save').disabled = false;
+    $('btn-do-reoptimize').disabled = false;
+    rqFillEmail();
+}
+
+// The reply written during the scan (no new AI call): To, Subject, body and the JD's checklist.
+function rqFillEmail() {
+    const r = optPanel.requirement;
+    if (!r) return;
+    const items = r.checklist || [];
+    doBox.set({ to: r.to, subject: r.subject, body: r.body,
+        checklist: items.length ? '<b style="color:#334155;">What this job asks</b><br>' + items.map(i =>
+            `<span style="color:${i.ok ? '#059669' : '#b45309'};">${i.ok ? '✓' : '⚠'} ${escapeHtml(i.text)}</span>`).join('<br>') : '' },
+        'Prepared from the recruiter\'s email - check and edit it. The draft gets exactly this email, as a reply in their thread.');
 }
 
 async function draftOptimizeRun(firstTime) {
@@ -5786,9 +5824,12 @@ async function jobOptimizeSaveAndDraft() {
     if (/\[please (fill|add):/i.test(body) && !confirm('The email still has [please fill / add] parts. Create the draft anyway and fill them in Gmail?')) return;
     $('btn-do-save').disabled = true;
     try {
-        const d = await optimizeEnsureSaved();
+        const req = optPanel.requirement;
+        const unchanged = req && pdResume.result && pdResume.result.requirement_original && !rv.edited && $('do-optimized').value === rv.text;
+        const d = unchanged ? { id: null } : await optimizeEnsureSaved();
         $('modal-draft-optimize').style.display = 'none';
-        await createJobDraft(optPanel.jobId, optPanel.candId, to, null, d.id, { subject, body });
+        await createJobDraft(optPanel.jobId, optPanel.candId, to, null, d.id, { subject, body, requirementId: req ? req.id : null });
+        if (req) optPanel.requirement = null;
     } catch (err) {
         showToast(err.message, 'error', 6000);
     } finally { $('btn-do-save').disabled = false; }
@@ -6138,7 +6179,7 @@ async function rpCheck() {
 // Requirements from Gmail (inbox_requirements.py): requirement email -> tailored resume -> draft reply.
 // =========================================================================
 const rq = { wired: false, poll: null, recheckId: null, recheckUntil: 0 };
-const RQ_COLORS = { drafted: '#dcfce7', drafted_input: '#fef9c3', low_match: '#fef3c7', not_requirement: '#f1f5f9', filtered: '#f1f5f9', error: '#fee2e2', checking: '#e0f2fe' };
+const RQ_COLORS = { review: '#dbeafe', drafted: '#dcfce7', drafted_input: '#fef9c3', low_match: '#fef3c7', not_requirement: '#f1f5f9', filtered: '#f1f5f9', error: '#fee2e2', checking: '#e0f2fe' };
 
 function openRequirements(candId) {
     const $ = id => document.getElementById(id);
@@ -6174,10 +6215,12 @@ async function rqLoad() {
             <td><span style="display:inline-block; padding:2px 8px; border-radius:999px; font-weight:700; background:${RQ_COLORS[r.status] || '#f1f5f9'}; white-space:nowrap;">${escapeHtml(r.status_label)}</span></td>
             <td>${r.match_pct != null ? r.match_pct + '%' : '-'}</td>
             <td style="max-width:170px; word-break:break-all;">${r.resume_version_id ? `<a href="/api/optimized-resumes/${r.resume_version_id}/download">${escapeHtml(r.resume_filename || 'tailored resume')}</a>` : (r.status === 'drafted' ? '<span style="color:#94a3b8;">original</span>' : '-')}</td>
-            <td style="min-width:220px; color:#475569;">${escapeHtml(r.reason || '')}${['not_requirement', 'filtered', 'low_match'].includes(r.status)
+            <td style="min-width:220px; color:#475569;">${escapeHtml(r.reason || '')}${r.status === 'review'
+                ? `<div><button type="button" class="btn btn-primary btn-xs rq-review" data-id="${r.id}" style="margin-top:4px;">👁 Review &amp; create draft</button></div>` : ''}${['not_requirement', 'filtered', 'low_match'].includes(r.status)
                 ? `<div><button type="button" class="btn btn-secondary btn-xs rq-recheck" data-id="${r.id}" style="margin-top:4px;">↻ Check again</button></div>` : ''}</td>
         </tr>`).join('') : `<tr><td colspan="8" style="text-align:center; color:#64748b; padding:18px;">${want ? 'Nothing with this result yet - choose "All".' : 'No requirement emails checked yet - click "Scan Gmail now".'}</td></tr>`;
     $('rq-body').querySelectorAll('.rq-recheck').forEach(b => b.addEventListener('click', () => rqRecheck(b)));
+    $('rq-body').querySelectorAll('.rq-review').forEach(b => b.addEventListener('click', () => rqReview(parseInt(b.dataset.id))));
     clearTimeout(rq.poll);
     // "Check again": keep refreshing until that email has its new result (the scan may run on another server worker)
     const waiting = rq.recheckId && Date.now() < rq.recheckUntil &&
@@ -6195,6 +6238,19 @@ async function rqLoad() {
     } else if ($('rq-msg').textContent.startsWith('Scanning')) {
         $('rq-msg').textContent = 'Scan finished.';
     }
+}
+
+// Review: the tailored resume and the prepared reply in the Optimize window; the draft is created from there.
+async function rqReview(id) {
+    const res = await fetch(`/api/requirements/${id}`);
+    const d = await res.json().catch(() => ({}));
+    if (!res.ok) { showToast(d.error || 'Could not open it.', 'error'); return; }
+    if (d.status !== 'review') { showToast(`This one is already: ${d.status_label}.`, 'info'); rqLoad(); return; }
+    document.getElementById('modal-reqs').style.display = 'none';
+    clearTimeout(rq.poll);
+    const title = [d.job.title, d.job.company].filter(Boolean).join(' - ') || d.subject;
+    await openOptimizePanel({ mode: 'job', candId: d.candidate_id, jobId: d.job_id, title, jdText: d.job.description,
+        requirement: Object.assign({ id: d.id }, d.draft) });
 }
 
 async function rqRecheck(btn) {

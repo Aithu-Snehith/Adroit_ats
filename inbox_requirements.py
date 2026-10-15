@@ -12,13 +12,18 @@ scan_candidate():
   4. The Resume Optimizer runs on the consultant's original resume: below MIN_MATCH % nothing is
      drafted (the reason is kept). Otherwise the tailored resume is saved as a version (or the
      original is used when no changes were needed).
-  5. A Gmail draft "Re: <their subject>" goes into the vendor's thread with the standard pitch and
-     that resume attached; the application appears in the tracker as "Draft created".
+  5. Review first (default): the reply email is written and kept with the row ("Ready to review"); the
+     recruiter opens it (Review), checks / edits the resume and the email, and creates the draft
+     (/api/outreach/create-draft with requirement_id) - "Re: <their subject>" in the vendor's thread.
+     REQUIREMENT_AUTO_DRAFT=1 creates the draft straight away instead (the earlier behaviour).
+     Either way the application then appears in the tracker as "Draft created".
 Nothing is ever sent automatically. Errors (AI unavailable, Gmail busy) are retried up to 3 times.
 """
 import email
 import imaplib
+import json
 import logging
+import os
 import re
 import time
 from email.utils import parseaddr
@@ -30,10 +35,12 @@ import resume_bot
 logger = logging.getLogger("inbox_requirements")
 
 MIN_MATCH = 60
+# Review first: prepare the tailored resume + reply, and let the recruiter create the draft after checking them.
+AUTO_DRAFT = os.getenv("REQUIREMENT_AUTO_DRAFT", "").strip() == "1"
 SCAN_QUERY = '"category:primary newer_than:2d"'
 MAX_PER_SCAN = 30
 MAX_ATTEMPTS = 3
-STATUS_LABELS = {"drafted": "Draft created", "drafted_input": "Draft created - needs your input", "low_match": "Low match - no draft", "not_requirement": "Not a requirement",
+STATUS_LABELS = {"review": "Ready to review", "drafted": "Draft created", "drafted_input": "Draft created - needs your input", "low_match": "Low match - no draft", "not_requirement": "Not a requirement",
                  "filtered": "Skipped (not a job email)", "error": "Problem - will retry", "checking": "Checking..."}
 
 _SKIP_SENDER = re.compile(r"(no-?reply|do-?not-?reply|notifications?|mailer-daemon|alerts?|jobalerts?|newsletter|updates?)@", re.I)
@@ -164,7 +171,7 @@ def extract(p: Dict, full_text: str) -> Dict:
 def scan_candidate(conn, cand: Dict, user_id: Optional[int] = None, imap_factory=None) -> Dict:
     account, password = reply_inbox._creds(cand)
     known = _known(conn, cand["id"])
-    stats = {"checked": 0, "drafted": 0, "low_match": 0, "not_requirement": 0, "filtered": 0, "errors": 0, "skipped_known": 0}
+    stats = {"checked": 0, "review": 0, "drafted": 0, "low_match": 0, "not_requirement": 0, "filtered": 0, "errors": 0, "skipped_known": 0}
     try:
         mail = (imap_factory or imaplib.IMAP4_SSL)("imap.gmail.com", 993)
         mail.login(account, password)
@@ -275,14 +282,24 @@ def _handle(conn, rid: int, cand: Dict, p: Dict, full_text: str, user_id: Option
                                    skills=res.get("mandatory_matched_skills") or [], default_to=data["recruiter_email"],
                                    default_subject=their_subject)
     # Answer in their thread - unless the JD says to apply to a different address (then it's a new email).
-    in_thread = plan["to"].lower() in (data["recruiter_email"], p["from_email"], p.get("reply_to") or "")
+    thread_emails = [e for e in dict.fromkeys((data["recruiter_email"], p["from_email"], p.get("reply_to") or "")) if e]
+    in_thread = plan["to"].lower() in thread_emails
+    needs = plan["needs_input"]
+    if not AUTO_DRAFT:
+        _set(conn, rid, status="review", match_pct=match, job_id=job_id, resume_version_id=version_id, ai_model=data.get("_model"),
+             draft_to=plan["to"], draft_subject=plan["subject"], draft_body=plan["body"],
+             draft_checklist=json.dumps(plan.get("checklist") or []), thread_refs=p.get("references_hdr") or "",
+             thread_emails=",".join(thread_emails),
+             reason=f"Match {match}% - resume " + (f"tailored ({attachment[0]})" if version_id else "unchanged (no changes needed)")
+                    + " and reply written. Review them, then create the draft."
+                    + (f" Needs your input: {'; '.join(x.strip('[]') for x in needs)}" if needs else ""))
+        return "review"
     out = gmail_multi_manager.create_candidate_draft(
         cand["id"], job_id, custom_to_email=plan["to"], custom_subject=plan["subject"], custom_body=plan["body"],
         attachment=attachment, acting_user_id=user_id or cand.get("assigned_user_id"), resume_version_id=version_id,
         reply_to={"message_id": p["message_id"], "references": p.get("references_hdr") or "", "subject": p["subject"]} if in_thread else None)
     if not out.get("success"):
         raise RuntimeError(out.get("error") or "Could not create the Gmail draft")
-    needs = plan["needs_input"]
     _set(conn, rid, status="drafted_input" if needs else "drafted", match_pct=match, job_id=job_id, resume_version_id=version_id,
          ai_model=data.get("_model"),
          reason=f"Match {match}% - draft created with {attachment[0]}" + ("" if version_id else " (original resume - no changes needed)")
@@ -292,6 +309,26 @@ def _handle(conn, rid: int, cand: Dict, p: Dict, full_text: str, user_id: Option
 
 
 RECHECKABLE = ("not_requirement", "filtered", "low_match")
+
+
+def get(conn, rid: int) -> Optional[Dict]:
+    cur = conn.cursor()
+    cur.execute("SELECT * FROM inbox_requirements WHERE id = ?", (rid,))
+    row = cur.fetchone()
+    return dict(row) if row else None
+
+
+def reply_headers(row: Dict, to_email: str) -> Optional[Dict]:
+    """The vendor thread to answer in, when the draft goes to the address that wrote (else a new email)."""
+    emails = [e.strip().lower() for e in (row.get("thread_emails") or "").split(",") if e.strip()]
+    if (to_email or "").strip().lower() not in emails:
+        return None
+    return {"message_id": row["message_id"], "references": row.get("thread_refs") or "", "subject": row.get("subject") or ""}
+
+
+def mark_drafted(conn, rid: int, filename: str, version_id: Optional[int]) -> None:
+    _set(conn, rid, status="drafted", resume_version_id=version_id,
+         reason=f"Draft created after your review" + (f" with {filename}" if filename else "") + ". Check it in Gmail and press Send.")
 
 
 def recheck(conn, rid: int) -> Optional[int]:

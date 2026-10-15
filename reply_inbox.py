@@ -111,7 +111,7 @@ def _text_of(msg) -> str:
         t = re.sub(r"\n[ \t\r\f\v]*\n(\s*\n)+", "\n\n", re.sub(r"[ \t\xa0]+", " ", t)).strip()
         # Use the HTML when it holds clearly more of the message: job boards (e.g. a Dice Private Email)
         # send a short plain-text stub while the recruiter's message, job details and signature are HTML only.
-        if plain is None or len(t) > max(2 * len(plain.strip()), len(plain.strip()) + 300):
+        if plain is None or len(t) > 1.5 * len(plain.strip()) + 50:
             plain = t
     return plain or ""
 

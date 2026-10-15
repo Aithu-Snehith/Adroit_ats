@@ -1253,6 +1253,18 @@ def api_create_outreach_draft():
         finally:
             conn.close()
 
+    # A requirement from the consultant's Gmail, reviewed in the Optimize window: answer in the vendor's thread.
+    req_id, req_row, reply_to = _int_or_none(data.get("requirement_id")), None, None
+    if req_id:
+        conn = models.get_db_connection()
+        try:
+            req_row = inbox_requirements.get(conn, req_id)
+        finally:
+            conn.close()
+        if not req_row or req_row["candidate_id"] != int(candidate_id) or req_row.get("job_id") != int(job_id):
+            return jsonify({"error": "That requirement doesn't belong to this consultant and job."}), 400
+        reply_to = inbox_requirements.reply_headers(req_row, custom_to_email or "")
+
     chosen = _resume_version_for(user, candidate_id, _int_or_none(data.get("optimized_resume_id")), job_id)
     result = gmail_multi_manager.create_candidate_draft(
         candidate_id=int(candidate_id),
@@ -1264,11 +1276,19 @@ def api_create_outreach_draft():
         bcc=[c["email"] for c in bcc_contacts],
         attachment=chosen[:2] if chosen else None,
         acting_user_id=user["id"],
-        resume_version_id=chosen[2] if chosen else None
+        resume_version_id=chosen[2] if chosen else None,
+        reply_to=reply_to
     )
 
     if not result.get("success"):
         return jsonify(result), 400
+    if req_row:
+        conn = models.get_db_connection()
+        try:
+            inbox_requirements.mark_drafted(conn, req_id, chosen[0] if chosen else "", chosen[2] if chosen else None)
+        finally:
+            conn.close()
+        result["in_thread"] = bool(reply_to)
 
     if bcc_contacts:
         conn = models.get_db_connection()
@@ -1962,6 +1982,34 @@ def api_requirements_scan():
         _req_scans[i] = t
     t.start()
     return jsonify({"started": True, "consultants": len(with_gmail)})
+
+
+@app.route("/api/requirements/<int:req_id>", methods=["GET"])
+def api_requirement_detail(req_id):
+    """One requirement for Review: the prepared email, the job (JD for the Optimize window) and the vendor."""
+    user = current_user()
+    if not user:
+        return jsonify({"error": "Login required"}), 401
+    conn = models.get_db_connection()
+    try:
+        row = inbox_requirements.get(conn, req_id)
+    finally:
+        conn.close()
+    if not row or not _tracker_candidate_ids(user, row["candidate_id"]):
+        return jsonify({"error": "Not found"}), 404
+    job = models.get_job_by_id(row["job_id"]) if row.get("job_id") else None
+    try:
+        checklist = json.loads(row.get("draft_checklist") or "[]")
+    except ValueError:
+        checklist = []
+    return jsonify({"id": row["id"], "candidate_id": row["candidate_id"], "job_id": row.get("job_id"), "status": row.get("status"),
+                    "status_label": inbox_requirements.STATUS_LABELS.get(row.get("status") or "", row.get("status") or ""),
+                    "subject": row.get("subject"), "from_name": row.get("from_name"), "from_email": row.get("from_email"),
+                    "match_pct": row.get("match_pct"), "resume_version_id": row.get("resume_version_id"),
+                    "draft": {"to": row.get("draft_to") or "", "subject": row.get("draft_subject") or "", "body": row.get("draft_body") or "",
+                              "checklist": checklist},
+                    "job": {"title": (job or {}).get("title") or "", "company": (job or {}).get("company") or "",
+                            "description": (job or {}).get("description") or ""}})
 
 
 @app.route("/api/requirements/<int:req_id>/recheck", methods=["POST"])
