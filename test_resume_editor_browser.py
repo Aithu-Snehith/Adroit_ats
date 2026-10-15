@@ -237,7 +237,8 @@ try:
         page.fill("#rv-instr", "Change the headline to Java Full Stack Developer")
         page.click("#rv-send")
         page.wait_for_function("document.querySelector('#rv-preview').innerText.includes('Java Full Stack Developer')", timeout=15000)
-        check(ai_calls == ["edit"], f"one AI call for the chat edit: {ai_calls}")
+        # count only the chat's calls: the Paste window's own AI reading of the requirement can finish late
+        check(ai_calls.count("edit") == 1 and "rewrite" not in ai_calls, f"one AI call for the chat edit: {ai_calls}")
         check("Headline updated" in page.inner_text("#rv-chat-msgs"), "the chat answers what it changed")
         check("Java Full Stack Developer" in page.input_value("#do-optimized"), "the Text tab follows the chat edit")
         check(not page.is_disabled("#rv-undo"), "Undo is available")
