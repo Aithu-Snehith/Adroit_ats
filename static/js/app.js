@@ -1243,6 +1243,7 @@ function initResumeBot() {
     // The same resume workspace as the Optimize window: Word preview, Find, JD keywords, Edit with AI.
     let lastData = null, optSeq = 0;
     const rbw = makeResumeWorkspace('rbw', {
+        memKey: () => `rbw:${(candSelect ? candSelect.value : '')}:${_hash((jdTextarea ? jdTextarea.value : '').trim())}`,
         candId: () => (candSelect ? parseInt(candSelect.value) : NaN) || null,
         jd: () => (jdTextarea ? jdTextarea.value : ''),
         textId: 'result-preview-text',
@@ -5259,6 +5260,37 @@ function rvCount(text, k) {
     return (text.match(new RegExp('(^|[^a-z0-9])' + rvEsc(s) + '(?=$|[^a-z0-9])', 'g')) || []).length;
 }
 
+// Chat memory for the resume and email chats: the conversation per consultant + job, kept in this browser
+// (survives closing the window / reloading). Sent with each message so the AI remembers what was said.
+const chatMem = {
+    mem: {},
+    get(key) {
+        if (!key) return [];
+        if (!this.mem[key]) {
+            try { this.mem[key] = JSON.parse(localStorage.getItem('jh-chat:' + key) || '[]'); } catch (e) { this.mem[key] = []; }
+            if (!Array.isArray(this.mem[key])) this.mem[key] = [];
+        }
+        return this.mem[key];
+    },
+    push(key, msg) {
+        if (!key) return;
+        const a = this.get(key);
+        a.push(msg);
+        while (a.length > 24) a.shift();
+        try { localStorage.setItem('jh-chat:' + key, JSON.stringify(a)); } catch (e) { /* kept for this page only */ }
+    },
+    history(key) { return this.get(key).map(m => ({ role: m.role, text: m.text })); },
+};
+const CHAT_REVIEW = '__review__';
+const chatLabel = (instruction) => instruction === CHAT_REVIEW ? '💡 Review & suggest' : instruction;
+
+function chatSuggestionsHtml(list, cls) {
+    if (!list || !list.length) return '';
+    return `<div style="margin-top:6px; display:flex; flex-direction:column; gap:4px;"><b style="font-size:0.75rem; color:#475569;">💡 I'd suggest next:</b>` +
+        list.map(s => `<div style="display:flex; gap:6px; align-items:center;"><span style="flex:1;">${escapeHtml(s.label)}</span>` +
+            `<button type="button" class="btn btn-secondary btn-xs ${cls}" data-instr="${escapeHtml(s.instruction)}" title="${escapeHtml(s.instruction)}">Apply</button></div>`).join('') + '</div>';
+}
+
 function makeResumeWorkspace(prefix, host) {
     const el = (name) => document.getElementById(`${prefix}-${name}`);
     const ws = { docx: '', text: '', original: '', origDocx: '', origPromise: null, undo: [], tab: 'preview', marks: [], cur: -1,
@@ -5275,7 +5307,18 @@ function makeResumeWorkspace(prefix, host) {
         el('find-count').textContent = '';
         const box = el('chat-msgs');
         while (box.children.length > 1) box.lastChild.remove();
+        ws.chatKey = null;
         ws.setTab('preview');
+    };
+
+    // The conversation for this consultant + job comes back when the same resume is opened again.
+    ws.restoreChat = () => {
+        const key = host.memKey ? host.memKey() : '';
+        if (!el('chat-msgs') || key === ws.chatKey) return;
+        ws.chatKey = key;
+        const box = el('chat-msgs');
+        while (box.children.length > 1) box.lastChild.remove();
+        chatMem.get(key).forEach(m => bubble(m.html, m.who));
     };
 
     // The original Word file: the consultant's stored .docx (GET), or a base64 string already in hand.
@@ -5328,6 +5371,7 @@ function makeResumeWorkspace(prefix, host) {
     };
 
     ws.render = async () => {
+        ws.restoreChat();
         const box = el('preview');
         const mySeq = ++ws.renderSeq;
         box.classList.remove('rv-text');
@@ -5433,6 +5477,7 @@ function makeResumeWorkspace(prefix, host) {
         d.className = 'rv-msg rv-msg-' + who;
         d.innerHTML = html;
         box.appendChild(d);
+        d.querySelectorAll('.rv-sugg').forEach(b => b.addEventListener('click', () => ws.send(b.dataset.instr)));
         box.scrollTop = box.scrollHeight;
     };
 
@@ -5448,14 +5493,21 @@ function makeResumeWorkspace(prefix, host) {
         const instruction = (instr || el('instr').value || '').trim();
         if (!instruction) return;
         if (!ws.docx) { bubble('This resume has no Word (.docx) file to edit - edit it in the Text tab instead.', 'warn'); return; }
-        bubble(escapeHtml(instruction), 'me');
+        ws.restoreChat();
+        const key = ws.chatKey;
+        const history = chatMem.history(key);               // the conversation so far (before this message)
+        const mine = escapeHtml(chatLabel(instruction));
+        bubble(mine, 'me');
+        chatMem.push(key, { role: 'user', text: chatLabel(instruction), html: mine, who: 'me' });
         el('instr').value = '';
         const btn = el('send');
         btn.disabled = true; btn.textContent = '...';
         const seq = ws.seq;
         try {
+            const kw = (el('kw').innerText || '').replace(/^JD keywords in this resume:\s*/, '');
             const res = await fetch('/api/resume-editor/edit', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ candidate_id: host.candId(), docx_base64: ws.docx, instruction, original_text: ws.original, jd_text: host.jd() }) });
+                body: JSON.stringify({ candidate_id: host.candId(), docx_base64: ws.docx, instruction, original_text: ws.original, jd_text: host.jd(),
+                    history, keywords: kw }) });
             const d = await res.json().catch(() => ({}));
             if (seq !== ws.seq) return;                       // another resume was opened meanwhile
             if (!res.ok) { bubble(escapeHtml(d.error || 'Could not edit the resume.'), 'warn'); return; }
@@ -5467,7 +5519,13 @@ function makeResumeWorkspace(prefix, host) {
             }
             const list = (d.applied || []).map(a => `<li>${a.op === 'delete' ? 'Removed' : a.op === 'insert_after' ? 'Added' : 'Changed'}: ${escapeHtml((a.after || a.before || '').slice(0, 110))}</li>`).join('');
             const needs = (d.needs_info || []).length ? `<div>❓ ${d.needs_info.map(escapeHtml).join('<br>❓ ')}</div>` : '';
-            bubble(escapeHtml(d.reply || '') + (list ? `<ul style="margin:4px 0 0 16px; padding:0;">${list}</ul>` : '') + needs, d.changed ? 'ok' : 'warn');
+            const html = escapeHtml(d.reply || '') + (list ? `<ul style="margin:4px 0 0 16px; padding:0;">${list}</ul>` : '') + needs
+                + chatSuggestionsHtml(d.suggestions, 'rv-sugg');
+            const who = d.changed || !(d.skipped || []).length ? 'ok' : 'warn';      // advice is not a warning
+            bubble(html, who);
+            chatMem.push(key, { role: 'assistant', html, who,
+                text: [d.reply || '', ...(d.applied || []).map(a => 'Changed: ' + (a.after || a.before || '').slice(0, 120)),
+                       ...(d.suggestions || []).map(s => 'Suggested: ' + s.label)].join(' | ') });
         } catch (err) {
             bubble(escapeHtml(err.message), 'warn');
         } finally { btn.disabled = false; btn.textContent = 'Send'; }
@@ -5509,6 +5567,7 @@ function makeResumeWorkspace(prefix, host) {
 
 // The Optimize window's workspace. A chat edit counts as an unsaved optimized result of this job.
 const rv = makeResumeWorkspace('rv', {
+    memKey: () => 'rv:' + optKey(),
     candId: () => optPanel.candId,
     jd: () => document.getElementById('do-jd').value,
     textId: 'do-optimized',
@@ -5641,13 +5700,16 @@ function emailBox(prefix, ctx) {
                     <div><label style="font-size:0.75rem; font-weight:700; color:#475569;">Subject</label><input id="${prefix}-email-subject" class="form-control" style="font-size:0.85rem; font-weight:600;"></div>
                 </div>
                 <textarea id="${prefix}-email-body" rows="12" class="form-control" style="font-size:0.84rem; line-height:1.55;"></textarea>
+                <div id="${prefix}-email-chat" style="display:none; margin-top:8px; max-height:220px; overflow-y:auto; padding:8px; border:1px solid #e2e8f0; border-radius:8px; background:#f8fafc; font-size:0.8rem; flex-direction:column; gap:6px;"></div>
                 <div style="display:flex; gap:8px; margin-top:8px;">
-                    <input id="${prefix}-email-instr" class="form-control" placeholder="Tell the AI what to change, e.g. 'shorter' or 'notice period is 30 days'" style="flex:1; font-size:0.85rem;">
+                    <input id="${prefix}-email-instr" class="form-control" placeholder="Ask or tell the AI, e.g. 'is this right for the JD?' or 'say we found it on LinkedIn'" style="flex:1; font-size:0.85rem;">
                     <button type="button" class="btn btn-primary btn-sm" id="btn-${prefix}-email-ai">Ask AI</button>
+                    <button type="button" class="btn btn-secondary btn-sm" id="btn-${prefix}-email-review" title="The AI reviews this email for this job and suggests improvements - nothing is changed">💡 Review &amp; suggest</button>
                 </div>
             </div>`;
         $(`btn-${prefix}-email-rewrite`).addEventListener('click', () => box.generate());
         $(`btn-${prefix}-email-ai`).addEventListener('click', () => box.ask());
+        $(`btn-${prefix}-email-review`).addEventListener('click', () => box.ask(CHAT_REVIEW));
         $(`${prefix}-email-instr`).addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); box.ask(); } });
         $(`btn-${prefix}-email-undo`).addEventListener('click', () => {
             const prev = box.undo.pop();
@@ -5656,7 +5718,23 @@ function emailBox(prefix, ctx) {
             $(`${prefix}-email-note`).textContent = prev ? '↶ Undone' : '';
         });
     };
-    box.reset = () => { box.seq++; box.undo = []; const el = $(`${prefix}-email-box`); if (el) el.style.display = 'none'; if (box.rendered) { $(`${prefix}-email-body`).value = ''; } };
+    box.reset = () => { box.seq++; box.undo = []; box.chatKey = null; const el = $(`${prefix}-email-box`); if (el) el.style.display = 'none'; if (box.rendered) { $(`${prefix}-email-body`).value = ''; } };
+    box.memKey = () => { const c = ctx(); return `em:${c.candidate_id}:${c.job_id || _hash(((c.job_title || '') + '|' + (c.jd_text || '').slice(0, 600)).trim())}`; };
+    const chatLine = (m) => {
+        const mine = m.role === 'user';
+        return `<div style="align-self:${mine ? 'flex-end' : 'flex-start'}; max-width:92%; padding:6px 9px; border-radius:9px; line-height:1.45; ${mine ? 'background:#2563eb; color:#fff;' : 'background:#fff; border:1px solid #e2e8f0; color:#0f172a;'}">${m.html}</div>`;
+    };
+    box.showChat = () => {           // the conversation for this consultant + job
+        if (!box.rendered) return;
+        const key = box.memKey();
+        box.chatKey = key;
+        const msgs = chatMem.get(key);
+        const log = $(`${prefix}-email-chat`);
+        log.style.display = msgs.length ? 'flex' : 'none';
+        log.innerHTML = msgs.map(chatLine).join('');
+        log.querySelectorAll('.em-sugg').forEach(b => b.addEventListener('click', () => box.ask(b.dataset.instr)));
+        log.scrollTop = log.scrollHeight;
+    };
     box.visible = () => { const el = $(`${prefix}-email-box`); return !!el && el.style.display !== 'none' && !!(box.rendered && $(`${prefix}-email-body`).value.trim()); };
     box.values = () => ({ to: $(`${prefix}-email-to`).value.trim(), subject: $(`${prefix}-email-subject`).value.trim(), body: $(`${prefix}-email-body`).value.trim(),
         checklist: box.rendered ? $(`${prefix}-email-checklist`).innerHTML : '' });
@@ -5670,6 +5748,7 @@ function emailBox(prefix, ctx) {
         $(`${prefix}-email-checklist`).innerHTML = v.checklist || '';
         $(`${prefix}-email-checklist`).style.display = v.checklist ? '' : 'none';
         $(`${prefix}-email-status`).innerHTML = escapeHtml(note || '');
+        box.showChat();
     };
     box.generate = async () => {
         render();
@@ -5693,22 +5772,31 @@ function emailBox(prefix, ctx) {
             $(`${prefix}-email-status`).innerHTML = 'Check and edit the email - the draft gets exactly this email and the resume shown as attached.'
                 + (d.fallback ? ' <span style="color:#b45309;">(Standard email used - the AI could not write one that only uses facts from the resume.)</span>' : '');
             $(`${prefix}-email-note`).textContent = '';
+            box.showChat();
         } catch (err) {
             $(`${prefix}-email-status`).innerHTML = `<span style="color:#b91c1c;">${escapeHtml(err.message)}</span>`;
         } finally { $(`btn-${prefix}-email-rewrite`).disabled = false; }
     };
-    box.ask = async () => {
-        const instruction = $(`${prefix}-email-instr`).value.trim();
+    box.ask = async (given) => {
+        const instruction = (typeof given === 'string' && given) ? given : $(`${prefix}-email-instr`).value.trim();
         if (!instruction) return;
         const btn = $(`btn-${prefix}-email-ai`);
         btn.disabled = true; btn.textContent = 'Thinking...';
+        const key = box.memKey();
+        const history = chatMem.history(key);               // the conversation so far (before this message)
+        chatMem.push(key, { role: 'user', text: chatLabel(instruction), html: escapeHtml(chatLabel(instruction)) });
+        box.showChat();
         try {
             const cur = { subject: $(`${prefix}-email-subject`).value, body: $(`${prefix}-email-body`).value };
             const c = ctx();
             const res = await fetch('/api/ai/personalize-draft', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(Object.assign({}, c, { instruction, current_subject: cur.subject, current_body: cur.body })) });
+                body: JSON.stringify(Object.assign({}, c, { instruction, current_subject: cur.subject, current_body: cur.body, history })) });
             const d = await res.json().catch(() => ({}));
             if (!res.ok || !d.success) { showToast(d.error || 'The AI could not answer.', 'error'); return; }
+            const extraQ = (d.needs_info || []).length ? `<div>❓ ${d.needs_info.map(escapeHtml).join('<br>❓ ')}</div>` : '';
+            chatMem.push(key, { role: 'assistant', html: escapeHtml(d.reply || '') + extraQ + chatSuggestionsHtml(d.suggestions, 'em-sugg'),
+                text: [d.reply || '', ...(d.changes || []).map(x => 'Changed: ' + x), ...(d.suggestions || []).map(s => 'Suggested: ' + s.label)].join(' | ') });
+            box.showChat();
             if (d.applied) {
                 box.undo.push(cur);
                 $(`btn-${prefix}-email-undo`).disabled = false;

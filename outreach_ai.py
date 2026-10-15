@@ -19,9 +19,18 @@ from typing import Dict, List
 import gmail_multi_manager
 import resume_bot
 
-SYSTEM = """You edit a short job-application email written on behalf of an IT consultant.
-Apply the recruiter's instruction to the CURRENT email. Keep everything the instruction doesn't ask
-to change (earlier edits included). Plain text only - no markdown, no asterisks. Keep the greeting,
+SYSTEM = """You are a sharp recruiting assistant working WITH a recruiter on one job-application email
+written on behalf of an IT consultant. Think about the job (JOB_DESCRIPTION) and the consultant before you answer.
+First decide what the recruiter's message is:
+- an INSTRUCTION ("shorter", "say we found it on LinkedIn"): apply it to the CURRENT email, keeping
+  everything it doesn't ask to change (earlier edits included);
+- a QUESTION or a request for advice ("is this good?", "what is missing?", "REVIEW"): answer it in
+  "reply" and change NOTHING - return the CURRENT subject and body as they are.
+Use CONVERSATION SO FAR: what the recruiter told you earlier still holds (facts they stated count as given).
+Always add up to 3 "suggestions": specific improvements YOU recommend next for THIS job (e.g. the JD asks
+for something the email doesn't answer, the subject doesn't match what the JD asks, a claim the resume
+doesn't back), each with a short "label" and the exact "instruction" that would apply it. Don't repeat
+suggestions the recruiter already rejected. Plain text only - no markdown, no asterisks. Keep the greeting,
 the sign-off and the signature lines (name, phone, email) unless told otherwise.
 
 Facts: use ONLY the facts given in FACTS (FACTS.resume is the resume being attached - its projects and
@@ -35,7 +44,13 @@ If FACTS.us_based is false, never mention C2C, W2, 1099, H1B, green card or US w
 Return ONLY a JSON object:
 {"subject": "...", "body": "...", "changes": ["short description of each change you made"],
  "needs_info": ["question for the recruiter, only when a fact is missing"],
- "reply": "one or two friendly sentences to the recruiter about what you did"}"""
+ "reply": "what you did, or your answer / assessment (2-4 sentences)",
+ "suggestions": [{"label": "short", "instruction": "what to apply"}]}"""
+
+REVIEW = "__review__"
+REVIEW_ASK = ("REVIEW: assess this email for this job as an experienced recruiter would - is it right for what the JD "
+              "asks, the recruiter and the consultant? Change nothing. Give your assessment in 'reply' and your top 3 "
+              "improvements as suggestions.")
 
 _MONEY = re.compile(r"\$\s?\d[\d,]*(?:\.\d+)?(?:\s?k)?(?:\s?(?:/\s?(?:hr|hour)|per hour|an hour))?"
                     r"|\b\d[\d,]*(?:\.\d+)?\s?(?:/\s?hr|/\s?hour|per hour|lpa)\b", re.I)
@@ -107,10 +122,15 @@ def changed_lines(old: str, new: str) -> int:
     return sum(max(i2 - i1, j2 - j1) for tag, i1, i2, j1, j2 in sm.get_opcodes() if tag != "equal")
 
 
-def edit_draft(cand: Dict, job: Dict, instruction: str, subject: str, body: str, resume_text: str = "") -> Dict:
-    """{subject, body, reply, changes, needs_info, lines_changed, model, applied}. Never raises; when the
-    AI can't run or the edit is refused, the draft comes back unchanged and `reply` says why."""
-    unchanged = {"subject": subject, "body": body, "changes": [], "needs_info": [], "lines_changed": 0,
+def edit_draft(cand: Dict, job: Dict, instruction: str, subject: str, body: str, resume_text: str = "",
+               history=None, jd_text: str = "") -> Dict:
+    """{subject, body, reply, changes, needs_info, suggestions, lines_changed, model, applied}. Never raises;
+    when the AI can't run or the edit is refused, the draft comes back unchanged and `reply` says why.
+    history: the conversation so far ([{role: user|assistant, text}]); instruction REVIEW = advice only."""
+    review = instruction.strip() == REVIEW
+    if review:
+        instruction = REVIEW_ASK
+    unchanged = {"subject": subject, "body": body, "changes": [], "needs_info": [], "suggestions": [], "lines_changed": 0,
                  "model": "", "applied": False}
     if not resume_bot.ai_configured():
         return dict(unchanged, reply="The AI isn't set up on the server (no ANTHROPIC_API_KEY or GEMINI_API_KEY), so the draft was not changed. You can still edit it directly.")
@@ -120,11 +140,13 @@ def edit_draft(cand: Dict, job: Dict, instruction: str, subject: str, body: str,
         f["resume"] = (resume_text or application_brief.resume_text_for(cand, job.get("id"))[0])[:8000]
     except Exception:
         f["resume"] = ""
-    prompt = (f"FACTS:\n{json.dumps(f, indent=1, default=str)}\n\nCURRENT SUBJECT:\n{subject}\n\n"
-              f"CURRENT EMAIL:\n{body}\n\nINSTRUCTION:\n{instruction}\n")
+    jd = (jd_text or job.get("full_description") or job.get("description") or "").strip()[:8000]
+    convo = resume_bot.chat_history_text(history)
+    prompt = (f"FACTS:\n{json.dumps(f, indent=1, default=str)}\n\n" + (f"JOB_DESCRIPTION:\n{jd}\n\n" if jd else "")
+              + (f"CONVERSATION SO FAR:\n{convo}\n\n" if convo else "")
+              + f"CURRENT SUBJECT:\n{subject}\n\nCURRENT EMAIL:\n{body}\n\nRECRUITER'S MESSAGE:\n{instruction}\n")
     try:
-        client, types = resume_bot._gemini_client() if resume_bot.gemini_configured() else (None, None)
-        raw, _, model = resume_bot._generate(client, types, SYSTEM, prompt, want_json=True, max_tokens=2000)
+        raw, model = resume_bot.generate_chat(SYSTEM, prompt, max_tokens=2500)
     except Exception as ex:
         return dict(unchanged, reply=f"The AI couldn't answer ({resume_bot._explain_gemini_error(ex)}), so the draft was not changed.")
     data = resume_bot._parse_json_object(raw) or {}
@@ -132,19 +154,26 @@ def edit_draft(cand: Dict, job: Dict, instruction: str, subject: str, body: str,
     new_body = str(data.get("body") or "").strip() or body
     needs = [str(x) for x in (data.get("needs_info") or []) if str(x).strip()][:5]
     changes = [str(x) for x in (data.get("changes") or []) if str(x).strip()][:8]
+    tips = resume_bot.clean_suggestions(data.get("suggestions"))
+    answer = str(data.get("reply") or "").strip()
     if not data:
         return dict(unchanged, model=model, reply="The AI's answer couldn't be read, so the draft was not changed - please try again.")
-    problems = guard(f, subject + "\n" + body, new_subject + "\n" + new_body, instruction)
+    if review:
+        return dict(unchanged, model=model, needs_info=needs, suggestions=tips, reply=answer or "Here is what I would improve.")
+    # facts the recruiter stated earlier in this chat count as theirs
+    problems = guard(f, subject + "\n" + body, new_subject + "\n" + new_body,
+                     instruction + "\n" + resume_bot.history_user_text(history))
     if problems:
-        return dict(unchanged, model=model, needs_info=needs,
+        return dict(unchanged, model=model, needs_info=needs, suggestions=tips,
                     reply="I didn't apply that edit because it would add " + "; ".join(problems)
                           + ". Add the detail to the consultant's profile (or say it in your instruction) and ask again.")
     n = changed_lines(body, new_body) + (1 if new_subject != subject else 0)
     if not n:
-        msg = "No change was made to the draft."
-        if needs:
-            msg += " I need a bit more information first."
-        return dict(unchanged, model=model, needs_info=needs, reply=msg)
+        if needs:                  # an instruction that needs a fact: say plainly that nothing changed
+            msg = "No change was made - I need a bit more information first." + (f" {answer}" if answer else "")
+        else:                      # a question / advice: the answer itself
+            msg = answer or "No change was made to the draft."
+        return dict(unchanged, model=model, needs_info=needs, suggestions=tips, reply=msg)
     return {"subject": new_subject, "body": new_body, "changes": changes, "needs_info": needs, "lines_changed": n,
-            "model": model, "applied": True,
+            "suggestions": tips, "model": model, "applied": True,
             "reply": str(data.get("reply") or "").strip() or f"Updated the draft ({n} line{'s' if n != 1 else ''} changed)."}

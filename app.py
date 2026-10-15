@@ -1437,7 +1437,9 @@ def api_ai_personalize_draft():
                    us_based=gmail_multi_manager._is_us_based(cand), **_draft_extras(user, cand, job, to_email, version_id))
         return jsonify(out)
     out.update(outreach_ai.edit_draft(cand, job, user_instruction, current_subject, current_body,
-                                      resume_text=str(data.get("resume_text") or "")[:20000]))
+                                      resume_text=str(data.get("resume_text") or "")[:20000],
+                                      history=data.get("history") if isinstance(data.get("history"), list) else None,
+                                      jd_text=str(data.get("jd_text") or "")[:20000]))
     return jsonify(out)
 
 
@@ -2182,7 +2184,9 @@ def api_resume_editor_edit():
     if len(docx_bytes) > 5 * 1024 * 1024:
         return jsonify({"error": "That resume is over 5 MB."}), 413
     out = resume_editor.edit(docx_bytes, str(data.get("instruction") or "")[:2000], str(data.get("original_text") or "")[:30000],
-                             str(data.get("jd_text") or "")[:20000])
+                             str(data.get("jd_text") or "")[:20000],
+                             history=data.get("history") if isinstance(data.get("history"), list) else None,
+                             keywords=str(data.get("keywords") or "")[:800])
     return jsonify(out)
 
 

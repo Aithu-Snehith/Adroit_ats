@@ -1,5 +1,6 @@
 import re
 import os
+import re
 import io
 import base64
 import difflib
@@ -34,6 +35,10 @@ CLAUDE_EFFORT = os.getenv("CLAUDE_EFFORT", "medium")          # low | medium | h
 # Per Claude call; a slow answer falls through to Gemini, so both steps stay inside gunicorn's 240 s.
 CLAUDE_TIMEOUT_SECONDS = float(os.getenv("CLAUDE_TIMEOUT_SECONDS", "90"))
 # Models that take Anthropic's server-side refusal fallback (a declined request is re-run on another model).
+# The two chats (email + resume) give advice as well as edits, so they use a stronger model than the
+# high-volume optimizer: CLAUDE_CHAT_MODEL (default Sonnet 5.5). Falls back to the normal chain.
+CHAT_MODEL = os.getenv("CLAUDE_CHAT_MODEL", "claude-sonnet-5-5")
+CHAT_EFFORT = os.getenv("CLAUDE_CHAT_EFFORT", "medium")
 _CLAUDE_FALLBACK_MODELS = {"claude-opus-5-5", "claude-opus-5", "claude-fable-5-1", "claude-sonnet-5-5"}
 
 # Optional backups for when Gemini's whole free-tier chain fails (see _generate). Never the
@@ -790,20 +795,21 @@ def _claude_client():
     return _CLAUDE_CLIENT[1]
 
 
-def _generate_claude(system: str, prompt: str, want_json: bool, max_tokens: int):
+def _generate_claude(system: str, prompt: str, want_json: bool, max_tokens: int, model: str = "", effort: str = ""):
     """One Claude request. Returns (text, truncated, model_used); raises ClaudeError on any failure.
     The system prompt (master prompt + output contract) is the same for every resume, so it is marked
     for prompt caching. Thinking counts against max_tokens, so extra room is added on top of what the
     answer itself needs (capped so a non-streamed request stays well inside the SDK's limits)."""
+    model = model or CLAUDE_MODEL
     try:
         params = dict(
-            model=CLAUDE_MODEL,
+            model=model,
             max_tokens=min(max_tokens + 8000, 21000),
             system=[{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}],
             messages=[{"role": "user", "content": prompt + ("\n\nReturn ONLY the JSON object - no other text." if want_json else "")}],
-            output_config={"effort": CLAUDE_EFFORT},
+            output_config={"effort": effort or CLAUDE_EFFORT},
         )
-        if CLAUDE_MODEL in _CLAUDE_FALLBACK_MODELS:
+        if model in _CLAUDE_FALLBACK_MODELS:
             params.update(betas=["server-side-fallback-2026-07-01"], fallbacks="default")
             response = _claude_client().beta.messages.create(**params)
         else:
@@ -815,7 +821,50 @@ def _generate_claude(system: str, prompt: str, want_json: bool, max_tokens: int)
     text = "".join(b.text for b in response.content if getattr(b, "type", "") == "text").strip()
     if not text:
         raise ClaudeError("Claude returned an empty answer")
-    return text, response.stop_reason == "max_tokens", getattr(response, "model", None) or CLAUDE_MODEL
+    return text, response.stop_reason == "max_tokens", getattr(response, "model", None) or model
+
+
+def generate_chat(system: str, prompt: str, max_tokens: int = 3000):
+    """The email / resume chats: CHAT_MODEL first (better advice), then the normal chain."""
+    if claude_configured() and CHAT_MODEL and CHAT_MODEL != CLAUDE_MODEL:
+        try:
+            raw, _, model = _generate_claude(system, prompt, True, max_tokens, model=CHAT_MODEL, effort=CHAT_EFFORT)
+            return raw, model
+        except ClaudeError as ex:
+            logger.warning(f"Chat model {CHAT_MODEL} failed, using the normal chain: {_explain_gemini_error(ex)}")
+    client, types = _gemini_client() if gemini_configured() else (None, None)
+    raw, _, model = _generate(client, types, system, prompt, want_json=True, max_tokens=max_tokens)
+    return raw, model
+
+
+def chat_history_text(history) -> str:
+    """The conversation so far, for the prompt: the last 12 turns, each clipped."""
+    lines = []
+    for h in (history or [])[-12:]:
+        if not isinstance(h, dict):
+            continue
+        who = "RECRUITER" if h.get("role") == "user" else "YOU"
+        text = re.sub(r"\s+", " ", str(h.get("text") or "")).strip()[:600]
+        if text:
+            lines.append(f"{who}: {text}")
+    return "\n".join(lines)
+
+
+def history_user_text(history) -> str:
+    """What the recruiter said earlier - facts stated there count as confirmed by the recruiter."""
+    return "\n".join(str(h.get("text") or "")[:600] for h in (history or [])[-12:] if isinstance(h, dict) and h.get("role") == "user")
+
+
+def clean_suggestions(items) -> list:
+    out = []
+    for s in (items or [])[:3]:
+        if isinstance(s, dict):
+            label, instr = str(s.get("label") or "").strip()[:140], str(s.get("instruction") or "").strip()[:400]
+        else:
+            label = instr = str(s).strip()[:300]
+        if label and instr:
+            out.append({"label": label, "instruction": instr})
+    return out
 
 
 def _generate(client, types, system: str, prompt: str, want_json: bool, max_tokens: int):

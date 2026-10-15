@@ -39,6 +39,7 @@ import job_description_fetch  # noqa: E402
 import india_job_scrapers  # noqa: E402
 import models  # noqa: E402
 import resume_bot as rb  # noqa: E402
+import outreach_ai  # noqa: E402
 import resume_editor  # noqa: E402
 import resume_versions as rv  # noqa: E402
 import us_job_scrapers  # noqa: E402
@@ -106,10 +107,24 @@ def line_no(prompt, text):
     return int(m.group(1))
 
 
+PROMPTS = {"resume": [], "email": []}
+
+
 def fake_generate(client, types, system, prompt, want_json, max_tokens):
     if system == resume_editor.SYSTEM:
         ai_calls.append("edit")
+        PROMPTS["resume"].append(prompt)
         return json.dumps(EDIT_PLAN["fn"](prompt)), False, "stub"
+    if system == outreach_ai.SYSTEM:
+        PROMPTS["email"].append(prompt)
+        if "REVIEW:" in prompt:
+            return json.dumps({"reply": "Good overall, but it doesn't say where you found the role.",
+                               "suggestions": [{"label": "Say we found it on LinkedIn", "instruction": "Say we came across the posting on LinkedIn"}]}), False, "stub"
+        cur_subject = prompt.split("CURRENT SUBJECT:\n", 1)[1].split("\n\nCURRENT EMAIL:", 1)[0]
+        cur_body = prompt.split("CURRENT EMAIL:\n", 1)[1].split("\n\nRECRUITER'S MESSAGE:", 1)[0]
+        return json.dumps({"subject": cur_subject, "body": cur_body + "\nI came across this posting on LinkedIn.",
+                           "changes": ["Added where the role was found"], "reply": "Added that you found it on LinkedIn.",
+                           "suggestions": [{"label": "Shorter opening", "instruction": "Make the opening line shorter"}]}), False, "stub"
     if not want_json:
         ai_calls.append("rewrite")
         return f"[{line_no(prompt, 'Java, Spring Boot')}] Java, Spring Boot, React", False, "stub"
@@ -166,6 +181,36 @@ out = resume_editor.edit(DOCX, "Say 8 years in the summary")
 check(not out["changed"], f"years of experience never change: {out['reply']}")
 
 EDIT_PLAN["fn"] = plan(rep("Java Developer", "Java Full Stack Developer"), reply="Headline updated to the JD title.")
+HEADLINE_PLAN = EDIT_PLAN["fn"]
+
+
+def review_or_edit(prompt):
+    if "REVIEW:" in prompt:      # advice only: no edits, a suggestion to apply
+        return {"edits": [], "reply": "The headline says Java Developer but this JD is for a Java Full Stack Developer.",
+                "suggestions": [{"label": "Headline = JD title", "instruction": "Change the headline to Java Full Stack Developer"}], "needs_info": []}
+    return HEADLINE_PLAN(prompt)
+
+
+# ---- 1b. the chats as assistants: advice without edits, suggestions, memory, the chat model
+EDIT_PLAN["fn"] = review_or_edit
+out = resume_editor.edit(DOCX, "__review__", history=[{"role": "user", "text": "We found this on LinkedIn"}])
+check(not out["changed"] and out["suggestions"] and "headline" in out["reply"].lower(), f"Review & suggest: advice, no edits: {out}")
+check("CONVERSATION SO FAR" in PROMPTS["resume"][-1] and "found this on LinkedIn" in PROMPTS["resume"][-1], "the conversation is sent with the message")
+EDIT_PLAN["fn"] = plan(rep("Built REST APIs", "Built REST APIs on Kubernetes for retail order systems."))
+out = resume_editor.edit(DOCX, "Mention it in the project line", history=[{"role": "user", "text": "He deployed the APIs on Kubernetes"}])
+check(out["changed"] and "Kubernetes" in out["text"], f"a fact the recruiter stated earlier in the chat counts as confirmed: {out['reply']}")
+EDIT_PLAN["fn"] = review_or_edit
+chat_models = []
+real_claude, real_conf = rb._generate_claude, rb.claude_configured
+rb.claude_configured = lambda: True
+rb._generate_claude = lambda system, prompt, want_json, max_tokens, model="", effort="": (chat_models.append(model) or (json.dumps({"reply": "ok"}), False, model))
+rb.generate_chat("s", "p")
+check(chat_models == ["claude-sonnet-5-5"], f"the chats use the chat model (Sonnet 5.5): {chat_models}")
+def _fail(*a, **k):
+    raise rb.ClaudeError("down")
+rb._generate_claude = _fail
+check(rb.generate_chat("s", "p")[1] == "stub", "the chat falls back to the normal chain when the chat model fails")
+rb._generate_claude, rb.claude_configured = real_claude, real_conf
 
 # ---- 2. the screen
 EMAIL, PASSWORD = "rveditor@example.invalid", "RvEditor-Test-1"
@@ -194,7 +239,7 @@ try:
         page.fill("input[name=password]", PASSWORD)
         page.click("button[type=submit]")
         page.wait_for_url("**/dashboard**")
-        check("app.js?v=5.85.0" in page.content(), "cache-buster not bumped to 5.85.0")
+        check("app.js?v=5.86.0" in page.content(), "cache-buster not bumped to 5.86.0")
         page.wait_for_function("state.consultants && state.consultants.length >= 1", timeout=15000)
 
         page.click("#btn-open-paste-draft-modal")
@@ -245,6 +290,41 @@ try:
         page.click("#rv-undo")
         page.wait_for_function("!document.querySelector('#rv-preview').innerText.includes('Java Full Stack Developer')", timeout=10000)
         check(page.is_disabled("#rv-undo") and "Java Full Stack Developer" not in page.input_value("#do-optimized"), "Undo goes back")
+
+        # ---- the resume chat as an assistant: Review & suggest (no edits) -> Apply a suggestion; it remembers
+        EDIT_PLAN["fn"] = review_or_edit
+        before = page.input_value("#do-optimized")
+        page.click("#rv-workspace .rv-chip[data-instr='__review__']")
+        page.wait_for_function("document.getElementById('rv-chat-msgs').innerText.includes('suggest next')", timeout=15000)
+        msgs = page.inner_text("#rv-chat-msgs")
+        check("Review & suggest" in msgs and "this JD is for a Java Full Stack Developer" in msgs and page.input_value("#do-optimized") == before,
+              f"advice shown, resume unchanged: {msgs[-300:]!r}")
+        page.click("#rv-chat-msgs .rv-sugg")
+        page.wait_for_function("document.querySelector('#rv-preview').innerText.includes('Java Full Stack Developer')", timeout=15000)
+        check("CONVERSATION SO FAR" in PROMPTS["resume"][-1] and "Review & suggest" in PROMPTS["resume"][-1], "Apply sends the conversation too")
+        page.click("#rv-undo")
+        page.wait_for_function("!document.querySelector('#rv-preview').innerText.includes('Java Full Stack Developer')", timeout=10000)
+
+        # ---- the email chat: Review & suggest, Apply, the conversation shown and remembered
+        page.wait_for_function("document.getElementById('do-email-body') && document.getElementById('do-email-body').value", timeout=15000)
+        page.click("#btn-do-email-review")
+        page.wait_for_function("document.getElementById('do-email-chat').innerText.includes('where you found the role')", timeout=15000)
+        check(page.is_visible("#do-email-chat") and "LinkedIn" not in page.input_value("#do-email-body"), "email advice shown, email unchanged")
+        page.click("#do-email-chat .em-sugg")
+        page.wait_for_function("document.getElementById('do-email-body').value.includes('posting on LinkedIn')", timeout=15000)
+        check("CONVERSATION SO FAR" in PROMPTS["email"][-1] and "where you found the role" in PROMPTS["email"][-1], "the email chat remembers its conversation")
+        chat_text = page.inner_text("#do-email-chat")
+        check(chat_text.count("Review & suggest") == 1 and "Added that you found it on LinkedIn" in chat_text and "Shorter opening" in chat_text,
+              f"conversation + next suggestion shown: {chat_text!r}")
+
+        page.locator("#do-email-box").scroll_into_view_if_needed()
+        page.screenshot(path=shot.replace(".png", "_chat.png"))
+        # closing and reopening the window for the same requirement brings both conversations back
+        page.click("#btn-close-draft-optimize")
+        page.click("#btn-pd-optimize")
+        page.wait_for_function("document.getElementById('rv-chat-msgs').innerText.includes('Review & suggest')", timeout=15000)
+        check("this JD is for a Java Full Stack Developer" in page.inner_text("#rv-chat-msgs"), "resume chat remembered after reopening")
+        EDIT_PLAN["fn"] = HEADLINE_PLAN
 
         page.click("#rv-workspace .rv-chip[data-instr*='eadline']")
         page.wait_for_function("document.querySelector('#rv-preview').innerText.includes('Java Full Stack Developer')", timeout=15000)

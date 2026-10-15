@@ -46,9 +46,10 @@
                             <button type="button" id="{{ p }}-undo" class="btn btn-secondary btn-xs" disabled>↶ Undo</button>
                         </div>
                         <div id="{{ p }}-chat-msgs" class="rv-chat-msgs" style="height:{{ chat_h }}; overflow-y:auto; padding:10px 12px; display:flex; flex-direction:column; gap:8px; font-size:0.82rem;">
-                            <div style="background:#f1f5f9; padding:8px 10px; border-radius:10px;">Tell me what to change, e.g. "change the headline to Senior DevOps Engineer" or "remove the Azure line from the summary". I edit the Word file itself, so the format stays. Click a line in the preview to point at it. Dates, years and past job titles stay as they are unless you ask; new technologies only if you name them.</div>
+                            <div style="background:#f1f5f9; padding:8px 10px; border-radius:10px;">Ask me anything about this resume for this job ("is the headline right?") or tell me what to change ("change the headline to Senior DevOps Engineer"). I remember our conversation and suggest what to do next. I edit the Word file itself, so the format stays. Click a line in the preview to point at it. Dates, years and past job titles stay as they are unless you ask; new technologies only if you name them.</div>
                         </div>
                         <div style="padding:6px 10px; display:flex; gap:5px; flex-wrap:wrap; border-top:1px solid #f1f5f9;">
+                            <button type="button" class="btn-prompt-chip rv-chip" data-instr="__review__" title="The AI reviews this resume for this job and suggests improvements - nothing is changed">💡 Review &amp; suggest</button>
                             <button type="button" class="btn-prompt-chip rv-chip" data-instr="Change the headline (the title line under the name) to match this job's title">🎯 Headline = JD title</button>
                             <button type="button" class="btn-prompt-chip rv-chip" data-instr="Make the professional summary shorter - at most 8 bullets, keep the strongest points for this job">✂️ Shorter summary</button>
                             <button type="button" class="btn-prompt-chip rv-chip" data-instr="Remove summary claims that no project in the resume backs up">🧹 Remove unbacked claims</button>
@@ -1492,7 +1493,7 @@
         window.VIEW_REGION = {{ view_region | tojson }};</script>
     <script src="/static/vendor/jszip.min.js"></script>
     <script src="/static/vendor/docx-preview.min.js"></script>
-    <script src="/static/js/app.js?v=5.85.0"></script>
+    <script src="/static/js/app.js?v=5.86.0"></script>
 
     <!-- Recruiter Management Inline Fallback: app.js defines all of these with toast-based
          feedback and no page reloads. These only fire if app.js somehow failed to load -
