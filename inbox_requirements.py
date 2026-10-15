@@ -252,7 +252,8 @@ def _handle(conn, rid: int, cand: Dict, p: Dict, full_text: str, user_id: Option
     name, original = found
     docx = original if name.lower().endswith(".docx") else None
     resume_text = resume_bot.extract_text_from_file_bytes(original, name, strict=True)
-    res = resume_bot.optimize_resume_for_jd(resume_text, jd, docx_bytes=docx)
+    import consultant_rules
+    res = resume_bot.optimize_resume_for_jd(resume_text, jd, custom_instructions=consultant_rules.text_for(cand["id"], "resume"), docx_bytes=docx)
     if res.get("error"):
         raise RuntimeError(res["error"])
     if not res.get("ai_powered"):

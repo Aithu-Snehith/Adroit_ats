@@ -208,7 +208,7 @@ try:
         page.fill("input[name=password]", PASSWORD)
         page.click("button[type=submit]")
         page.wait_for_url("**/dashboard**")
-        check("app.js?v=5.86.0" in page.content(), "cache-buster not bumped to 5.86.0")
+        check("app.js?v=5.87.0" in page.content(), "cache-buster not bumped to 5.87.0")
         page.click("a.nav-item[data-tab=vendors]")
         page.wait_for_function("document.getElementById('vendors-count').innerText.includes('USA list')", timeout=10000)
         check(page.inner_text("#vendors-tab-usa") == "USA vendors (4)" and page.inner_text("#vendors-tab-india") == "India vendors (3)",

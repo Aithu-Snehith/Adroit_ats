@@ -466,6 +466,17 @@ def init_db():
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     );
     """)
+    # Standing instructions per consultant for every email / resume (consultant_rules.py).
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS consultant_rules (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        candidate_id INTEGER NOT NULL,
+        kind TEXT NOT NULL,
+        text TEXT NOT NULL,
+        created_by INTEGER,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+    """)
     # Recruiter replies to applications, read from the consultant's Gmail (reply_inbox.py): the text,
     # the AI's sorting (interview / question / ...), the prepared reply and what was done with it.
     cursor.execute("""

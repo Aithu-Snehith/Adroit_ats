@@ -55,6 +55,9 @@ Structure (plain text, no markdown, no asterisks):
   hands-on and practical.
 - If FACTS.us_based is false, never mention C2C, W2, H1B, green card or US work authorization.
 - A short closing ("My resume is attached...") and the signature lines from FACTS (name, title, phone, email).
+CONSULTANT RULES (when given) are the recruiter's standing instructions for this consultant's emails: follow
+them - they win over the structure above where they differ - but never invent a fact for them; leave
+"[please fill: ...]" instead.
 Return ONLY JSON: {"body": "...", "answered": ["each question you answered"], "needs_input": ["each [please ...] you left"]}"""
 
 
@@ -123,7 +126,9 @@ def write(cand: Dict, job: Dict, jd_text: str, resume_text: str, b: Dict, reply:
         return {"body": _fallback(cand, job, b, reply, tailored, skills), "needs_input": [], "answered": [], "model": "", "fallback": True}
     opening = ("This email ANSWERS the vendor's requirement email - open by thanking them for sharing it."
                if reply else "This is a new application email.")
-    prompt = (f"GREETING: {_greeting(job)}\n{opening}\n"
+    import consultant_rules
+    rules = consultant_rules.prompt_block(cand.get("id"), "email")
+    prompt = (rules + f"GREETING: {_greeting(job)}\n{opening}\n"
               f"{'The attached resume was tailored to this job - say the resume is updated for this role.' if tailored else ''}\n\n"
               f"FACTS:\n{json.dumps(f, indent=1, default=str)}\n\nBRIEF:\n{json.dumps({k: v for k, v in b.items() if k != 'model'}, indent=1)}\n\n"
               f"JOB DESCRIPTION:\n{(jd_text or '')[:6000]}\n\nRESUME:\n{resume_text[:12000]}\n")
@@ -138,7 +143,7 @@ def write(cand: Dict, job: Dict, jd_text: str, resume_text: str, b: Dict, reply:
         if not body:
             break
         allowed_contacts = resume_text + "\n" + (b.get("apply_to_email") or "") + "\n" + (job.get("recruiter_email") or "")
-        problems = outreach_ai.guard(f, allowed_contacts, FILL_RE.sub("", body), "") + guard_metrics(body, resume_text, f)
+        problems = outreach_ai.guard(f, allowed_contacts, FILL_RE.sub("", body), rules) + guard_metrics(body, resume_text + "\n" + rules, f)
         if not problems:
             needs = [m.group(0) for m in FILL_RE.finditer(body)]
             return {"body": body, "needs_input": needs, "answered": [str(x) for x in data.get("answered") or []], "model": model, "fallback": False}

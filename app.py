@@ -21,6 +21,7 @@ import resume_versions
 import application_tracker
 import outreach_ai
 import resume_editor
+import consultant_rules
 import docx_editor
 import application_brief
 import regions
@@ -1588,6 +1589,12 @@ def api_resume_bot_optimize():
     if not jd_text:
         return jsonify({"error": "Paste the client's Job Description (JD) first."}), 400
 
+    # the consultant's standing resume rules go in with the recruiter's own instructions
+    rules_cid = _int_or_none(request.form.get("candidate_id") if request.files.get("resume_file") else (request.get_json(silent=True) or {}).get("candidate_id"))
+    if rules_cid and can_access_candidate(user, rules_cid):
+        standing = consultant_rules.text_for(rules_cid, "resume")
+        if standing:
+            custom_instructions = (custom_instructions + "\n" if custom_instructions else "") + "Standing rules for this consultant:\n" + standing
     result = resume_bot.optimize_resume_for_jd(
         resume_text=resume_text,
         jd_text=jd_text,
@@ -1986,6 +1993,50 @@ def api_requirements_scan():
     return jsonify({"started": True, "consultants": len(with_gmail)})
 
 
+@app.route("/api/consultants/<int:cid>/rules", methods=["GET", "POST"])
+def api_consultant_rules(cid):
+    """'📌 Rules for <consultant>': standing instructions for every email / resume of this consultant."""
+    user = current_user()
+    if not user:
+        return jsonify({"error": "Login required"}), 401
+    if not can_access_candidate(user, cid):
+        return jsonify({"error": "Consultant not found"}), 404
+    conn = models.get_db_connection()
+    try:
+        if request.method == "POST":
+            data = request.get_json(silent=True) or {}
+            try:
+                consultant_rules.add(conn, cid, str(data.get("kind") or ""), str(data.get("text") or ""), user["id"])
+            except consultant_rules.RuleError as ex:
+                return jsonify({"error": str(ex)}), 400
+        rules = consultant_rules.list_for(conn, cid)
+    finally:
+        conn.close()
+    return jsonify({"rules": rules})
+
+
+@app.route("/api/consultants/<int:cid>/rules/<int:rule_id>", methods=["PUT", "DELETE"])
+def api_consultant_rule(cid, rule_id):
+    user = current_user()
+    if not user:
+        return jsonify({"error": "Login required"}), 401
+    if not can_access_candidate(user, cid):
+        return jsonify({"error": "Consultant not found"}), 404
+    conn = models.get_db_connection()
+    try:
+        if request.method == "DELETE":
+            consultant_rules.delete(conn, cid, rule_id)
+        else:
+            try:
+                consultant_rules.update(conn, cid, rule_id, str((request.get_json(silent=True) or {}).get("text") or ""))
+            except consultant_rules.RuleError as ex:
+                return jsonify({"error": str(ex)}), 400
+        rules = consultant_rules.list_for(conn, cid)
+    finally:
+        conn.close()
+    return jsonify({"rules": rules})
+
+
 @app.route("/api/requirements/<int:req_id>", methods=["GET"])
 def api_requirement_detail(req_id):
     """One requirement for Review: the prepared email, the job (JD for the Optimize window) and the vendor."""
@@ -2186,7 +2237,8 @@ def api_resume_editor_edit():
     out = resume_editor.edit(docx_bytes, str(data.get("instruction") or "")[:2000], str(data.get("original_text") or "")[:30000],
                              str(data.get("jd_text") or "")[:20000],
                              history=data.get("history") if isinstance(data.get("history"), list) else None,
-                             keywords=str(data.get("keywords") or "")[:800])
+                             keywords=str(data.get("keywords") or "")[:800],
+                             rules=consultant_rules.prompt_block(cid, "resume") if cid else "")
     return jsonify(out)
 
 

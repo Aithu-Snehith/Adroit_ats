@@ -27,11 +27,14 @@ First decide what the recruiter's message is:
 - a QUESTION or a request for advice ("is the headline right?", "what's missing?", "REVIEW"): answer it in
   "reply" and make NO edits.
 Use CONVERSATION SO FAR: what the recruiter told you earlier still holds (facts they stated count as confirmed).
-Always add up to 3 "suggestions": specific changes YOU recommend next for THIS job (e.g. a headline that
+Always add 2 or 3 "suggestions": specific changes YOU recommend next for THIS job (e.g. a headline that
 doesn't match the JD title, JD skills the resume shows in a project but not in Skills, a summary that's too
-long, keyword stuffing), each with a short "label" and the exact "instruction" that would apply it. Never
-suggest adding a technology, project or number the resume doesn't show - ask about it in "needs_info" instead.
-Don't repeat suggestions the recruiter rejected.
+long, keyword stuffing), each with a short "label" and the exact "instruction" that would apply it. Only if
+there is truly nothing worth improving, say so and give none. Never suggest adding a technology, project or
+number the resume doesn't show - ask about it in "needs_info" instead. Don't repeat suggestions the recruiter rejected.
+Follow CONSULTANT RULES (the recruiter's standing instructions for this consultant's resume) unless the current
+message says otherwise. If the recruiter states a standing preference for ALL of this consultant's resumes
+("always", "every resume", "from now on"), apply it now AND put it, rewritten as one clear rule, in "save_rule".
 When editing: change ONLY what the instruction asks; keep the writing style; keep everything else as it is.
 Never change dates, years of experience, employers or company names. Change a headline or a job title
 only when the instruction asks for it. Never add a technology, tool, certification, project, client or
@@ -40,7 +43,8 @@ unclear, or would need invented facts, make no edits and ask in "needs_info".
 Edit operations: {"op":"replace","paragraph":N,"new_text":"..."} | {"op":"insert_after","paragraph":N,"new_text":"..."}
 | {"op":"delete","paragraph":N}. A new bullet goes after an existing bullet of the same section.
 Return ONLY JSON: {"edits":[...], "reply":"what you changed, or your answer / assessment (2-4 sentences)",
-"needs_info":["..."], "suggestions":[{"label":"short","instruction":"what to apply"}]}"""
+"needs_info":["..."], "suggestions":[{"label":"short","instruction":"what to apply"}],
+"save_rule":"only when the recruiter stated a preference for every resume - else empty"}"""
 
 REVIEW = "__review__"
 REVIEW_ASK = ("REVIEW: assess this resume for this job as an experienced recruiter would (headline, summary, skills, "
@@ -56,7 +60,7 @@ def _new_tech(text: str, allowed: str) -> List[str]:
 
 
 def edit(docx_bytes: bytes, instruction: str, original_text: str = "", jd_text: str = "", history=None,
-         keywords: str = "") -> Dict:
+         keywords: str = "", rules: str = "") -> Dict:
     """{docx_base64, text, applied, skipped, reply, needs_info, suggestions, changed}. Never raises; when
     nothing can be applied the document comes back unchanged and `reply` says why. history: the
     conversation so far; instruction REVIEW = advice only; keywords: the JD keyword counts on screen."""
@@ -75,7 +79,7 @@ def edit(docx_bytes: bytes, instruction: str, original_text: str = "", jd_text: 
     jd_part = (f"JOB DESCRIPTION (context only - e.g. for its title or keywords; its requirements are NOT the candidate's "
                f"experience):\n{jd_text[:5000]}\n\n") if (jd_text or "").strip() else ""
     convo = resume_bot.chat_history_text(history)
-    prompt = (f"{jd_part}" + (f"JD KEYWORDS IN THE RESUME (times found): {keywords[:600]}\n\n" if keywords else "")
+    prompt = (rules + f"{jd_part}" + (f"JD KEYWORDS IN THE RESUME (times found): {keywords[:600]}\n\n" if keywords else "")
               + (f"CONVERSATION SO FAR:\n{convo}\n\n" if convo else "")
               + f"RESUME (numbered paragraphs):\n{docx_editor.numbered_listing(paragraphs)}\n\nRECRUITER'S MESSAGE:\n{instruction}\n")
     try:
@@ -87,11 +91,12 @@ def edit(docx_bytes: bytes, instruction: str, original_text: str = "", jd_text: 
     needs = [str(x) for x in (data.get("needs_info") or []) if str(x).strip()][:5]
     tips = resume_bot.clean_suggestions(data.get("suggestions"))
     answer = str(data.get("reply") or "").strip()
+    unchanged["save_rule"] = str(data.get("save_rule") or "").strip()[:500]
     if review or not edits:          # advice / an answer - nothing to apply
         return dict(unchanged, needs_info=needs, suggestions=tips, model=model,
                     reply=answer or "Nothing to change for that - tell me what you'd like edited.")
     # facts the recruiter stated earlier in this chat count as confirmed
-    allowed_text = "\n".join([current_text, original_text or "", instruction, resume_bot.history_user_text(history)])
+    allowed_text = "\n".join([current_text, original_text or "", instruction, resume_bot.history_user_text(history), rules])
 
     def extra_check(old, new, inserting):
         added = _new_tech(new, allowed_text)
@@ -114,4 +119,4 @@ def edit(docx_bytes: bytes, instruction: str, original_text: str = "", jd_text: 
     if skipped:
         reply += " Not applied: " + "; ".join(f"line {s['paragraph']} ({s['reason']})" for s in skipped[:4]) + "."
     return {"docx_base64": base64.b64encode(new_bytes).decode("ascii"), "text": text, "applied": applied, "skipped": skipped,
-            "needs_info": needs, "suggestions": tips, "reply": reply, "changed": True, "model": model}
+            "needs_info": needs, "suggestions": tips, "save_rule": unchanged["save_rule"], "reply": reply, "changed": True, "model": model}

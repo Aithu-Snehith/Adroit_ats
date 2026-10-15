@@ -3414,7 +3414,8 @@ async function sendCopilotInstruction() {
                 job_id: currentCopilotJobId,
                 instruction: instruction,
                 current_subject: curSubject,
-                current_body: curBody
+                current_body: curBody,
+                history: chatMem.history(`cp:${currentCopilotCandId}:${currentCopilotJobId}`)
             })
         });
 
@@ -3444,10 +3445,17 @@ async function sendCopilotInstruction() {
                     <div class="copilot-reply" style="display: flex; gap: 10px; align-items: flex-start;">
                         <div style="width: 28px; height: 28px; border-radius: 50%; background: #eff6ff; color: #2563eb; display: flex; align-items: center; justify-content: center; font-size: 0.9rem; flex-shrink: 0;">🤖</div>
                         <div style="background: ${tone}; color: #1e293b; padding: 10px 14px; border-radius: 12px; font-size: 0.85rem; max-width: 88%; line-height: 1.5;">
-                            ${escapeHtml(data.reply || '')}${changes}${needs}
+                            ${escapeHtml(data.reply || '')}${changes}${needs}${chatSuggestionsHtml(data.suggestions, 'cp-sugg')}${chatRuleHtml(data.save_rule, 'email')}
                         </div>
                     </div>
                 `;
+                const ck = `cp:${currentCopilotCandId}:${currentCopilotJobId}`;
+                chatMem.push(ck, { role: 'user', text: instruction, html: escapeHtml(instruction) });
+                chatMem.push(ck, { role: 'assistant', text: [data.reply || '', ...(data.suggestions || []).map(s => 'Suggested: ' + s.label)].join(' | '), html: escapeHtml(data.reply || '') });
+                msgContainer.querySelectorAll('.cp-sugg').forEach(b => b.onclick = () => applyCopilotQuickPrompt(b.dataset.instr));
+                msgContainer.querySelectorAll('.chat-save-rule').forEach(b => b.onclick = async () => {
+                    if (await saveRule(parseInt(currentCopilotCandId), b.dataset.kind, b.dataset.rule)) { b.disabled = true; b.textContent = '📌 Saved as a rule'; }
+                });
                 msgContainer.scrollTop = msgContainer.scrollHeight;
             }
         } else {
@@ -5284,6 +5292,81 @@ const chatMem = {
 const CHAT_REVIEW = '__review__';
 const chatLabel = (instruction) => instruction === CHAT_REVIEW ? '💡 Review & suggest' : instruction;
 
+// 📌 Rules: standing instructions per consultant for every email / resume (consultant_rules.py)
+const rules = { candId: null, list: [], wired: false, onChange: [] };
+
+async function rulesLoad(candId) {
+    try {
+        const d = await (await fetch(`/api/consultants/${candId}/rules`)).json();
+        if (Array.isArray(d.rules)) { rules.candId = candId; rules.list = d.rules; }
+    } catch (e) { /* the links just show no count */ }
+    rules.onChange.forEach(fn => fn());
+    return rules.list;
+}
+const rulesCount = (candId, kind) => rules.candId === candId ? rules.list.filter(r => r.kind === kind).length : 0;
+const rulesName = (candId) => ((state.consultants || []).find(c => c.id === parseInt(candId)) || {}).name || 'this consultant';
+
+function rulesRender() {
+    const $ = id => document.getElementById(id);
+    ['email', 'resume'].forEach(kind => {
+        const items = rules.list.filter(r => r.kind === kind);
+        $(`rules-${kind}`).innerHTML = items.length ? items.map((r, i) => `<div style="display:flex; gap:8px; align-items:flex-start; padding:5px 0; border-bottom:1px solid #f1f5f9; font-size:0.84rem;">
+            <span style="color:#64748b;">${i + 1}.</span><span style="flex:1; color:#0f172a;">${escapeHtml(r.text)}</span>
+            <button type="button" class="btn btn-secondary btn-xs rules-del" data-id="${r.id}" title="Delete this rule">✕</button></div>`).join('')
+            : `<div style="font-size:0.8rem; color:#94a3b8;">No ${kind} rules yet.</div>`;
+    });
+    document.querySelectorAll('#modal-rules .rules-del').forEach(b => b.addEventListener('click', async () => {
+        await fetch(`/api/consultants/${rules.candId}/rules/${b.dataset.id}`, { method: 'DELETE' });
+        await rulesLoad(rules.candId);
+        rulesRender();
+    }));
+}
+
+async function openRules(candId, kind) {
+    const $ = id => document.getElementById(id);
+    if (!candId) { showToast('Select the consultant first.', 'warning'); return; }
+    if (!rules.wired) {
+        rules.wired = true;
+        $('btn-close-rules').addEventListener('click', () => { $('modal-rules').style.display = 'none'; });
+        const add = async () => {
+            const text = $('rules-text').value.trim();
+            if (!text) return;
+            const r = await saveRule(rules.candId, $('rules-kind').value, text);
+            if (r) { $('rules-text').value = ''; rulesRender(); }
+        };
+        $('rules-add').addEventListener('click', add);
+        $('rules-text').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); add(); } });
+    }
+    $('rules-title').textContent = `📌 Rules for ${rulesName(candId)}`;
+    $('rules-kind').value = kind || 'email';
+    $('rules-msg').textContent = '';
+    await rulesLoad(candId);
+    rulesRender();
+    $('modal-rules').style.display = 'flex';
+    $('rules-text').focus();
+}
+
+async function saveRule(candId, kind, text) {
+    const res = await fetch(`/api/consultants/${candId}/rules`, { method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ kind, text }) });
+    const d = await res.json().catch(() => ({}));
+    if (!res.ok) {
+        const msg = document.getElementById('rules-msg');
+        if (msg && document.getElementById('modal-rules').style.display === 'flex') msg.textContent = d.error || 'Could not save.';
+        else showToast(d.error || 'Could not save the rule.', 'warning');
+        return null;
+    }
+    rules.candId = candId;
+    rules.list = d.rules;
+    rules.onChange.forEach(fn => fn());
+    showToast(`📌 Saved - followed in every ${kind} for ${rulesName(candId)}.`, 'success');
+    return d.rules;
+}
+
+function chatRuleHtml(rule, kind) {
+    return rule ? `<div style="margin-top:6px;"><button type="button" class="btn btn-secondary btn-xs chat-save-rule" data-kind="${kind}" data-rule="${escapeHtml(rule)}" title="${escapeHtml(rule)}">📌 Save as a rule for every ${kind}</button></div>` : '';
+}
+
 function chatSuggestionsHtml(list, cls) {
     if (!list || !list.length) return '';
     return `<div style="margin-top:6px; display:flex; flex-direction:column; gap:4px;"><b style="font-size:0.75rem; color:#475569;">💡 I'd suggest next:</b>` +
@@ -5316,6 +5399,7 @@ function makeResumeWorkspace(prefix, host) {
         const key = host.memKey ? host.memKey() : '';
         if (!el('chat-msgs') || key === ws.chatKey) return;
         ws.chatKey = key;
+        if (ws.showRules) ws.showRules();
         const box = el('chat-msgs');
         while (box.children.length > 1) box.lastChild.remove();
         chatMem.get(key).forEach(m => bubble(m.html, m.who));
@@ -5478,6 +5562,9 @@ function makeResumeWorkspace(prefix, host) {
         d.innerHTML = html;
         box.appendChild(d);
         d.querySelectorAll('.rv-sugg').forEach(b => b.addEventListener('click', () => ws.send(b.dataset.instr)));
+        d.querySelectorAll('.chat-save-rule').forEach(b => b.addEventListener('click', async () => {
+            if (await saveRule(host.candId(), b.dataset.kind, b.dataset.rule)) { b.disabled = true; b.textContent = '📌 Saved as a rule'; }
+        }));
         box.scrollTop = box.scrollHeight;
     };
 
@@ -5520,7 +5607,7 @@ function makeResumeWorkspace(prefix, host) {
             const list = (d.applied || []).map(a => `<li>${a.op === 'delete' ? 'Removed' : a.op === 'insert_after' ? 'Added' : 'Changed'}: ${escapeHtml((a.after || a.before || '').slice(0, 110))}</li>`).join('');
             const needs = (d.needs_info || []).length ? `<div>❓ ${d.needs_info.map(escapeHtml).join('<br>❓ ')}</div>` : '';
             const html = escapeHtml(d.reply || '') + (list ? `<ul style="margin:4px 0 0 16px; padding:0;">${list}</ul>` : '') + needs
-                + chatSuggestionsHtml(d.suggestions, 'rv-sugg');
+                + chatSuggestionsHtml(d.suggestions, 'rv-sugg') + chatRuleHtml(d.save_rule, 'resume');
             const who = d.changed || !(d.skipped || []).length ? 'ok' : 'warn';      // advice is not a warning
             bubble(html, who);
             chatMem.push(key, { role: 'assistant', html, who,
@@ -5552,6 +5639,14 @@ function makeResumeWorkspace(prefix, host) {
         el('send').addEventListener('click', () => ws.send());
         el('instr').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); ws.send(); } });
         document.querySelectorAll(`#${prefix}-workspace .rv-chip`).forEach(b => b.addEventListener('click', () => ws.send(b.getAttribute('data-instr'))));
+        const rulesLink = el('rules');
+        const showRules = () => {
+            const cid = host.candId();
+            if (rulesLink) rulesLink.textContent = `📌 Rules${cid && rulesCount(cid, 'resume') ? ` (${rulesCount(cid, 'resume')})` : ''}`;
+        };
+        rules.onChange.push(showRules);
+        if (rulesLink) rulesLink.addEventListener('click', (e) => { e.preventDefault(); openRules(host.candId(), 'resume'); });
+        ws.showRules = () => { const cid = host.candId(); if (cid && rules.candId !== cid) rulesLoad(cid); else showRules(); };
         el('undo').addEventListener('click', () => {
             const prev = ws.undo.pop();
             if (!prev) return;
@@ -5706,10 +5801,16 @@ function emailBox(prefix, ctx) {
                     <button type="button" class="btn btn-primary btn-sm" id="btn-${prefix}-email-ai">Ask AI</button>
                     <button type="button" class="btn btn-secondary btn-sm" id="btn-${prefix}-email-review" title="The AI reviews this email for this job and suggests improvements - nothing is changed">💡 Review &amp; suggest</button>
                 </div>
+                <div style="font-size:0.75rem; color:#64748b; margin-top:6px;">The AI remembers this job's conversation and follows <a href="#" id="${prefix}-email-rules" style="font-weight:700;">📌 Rules</a> for every email of this consultant.</div>
             </div>`;
         $(`btn-${prefix}-email-rewrite`).addEventListener('click', () => box.generate());
         $(`btn-${prefix}-email-ai`).addEventListener('click', () => box.ask());
         $(`btn-${prefix}-email-review`).addEventListener('click', () => box.ask(CHAT_REVIEW));
+        $(`${prefix}-email-rules`).addEventListener('click', (e) => { e.preventDefault(); openRules(ctx().candidate_id, 'email'); });
+        rules.onChange.push(() => {
+            const cid = ctx().candidate_id, n = cid ? rulesCount(parseInt(cid), 'email') : 0;
+            $(`${prefix}-email-rules`).textContent = `📌 Rules${n ? ` (${n})` : ''}`;
+        });
         $(`${prefix}-email-instr`).addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); box.ask(); } });
         $(`btn-${prefix}-email-undo`).addEventListener('click', () => {
             const prev = box.undo.pop();
@@ -5733,7 +5834,12 @@ function emailBox(prefix, ctx) {
         log.style.display = msgs.length ? 'flex' : 'none';
         log.innerHTML = msgs.map(chatLine).join('');
         log.querySelectorAll('.em-sugg').forEach(b => b.addEventListener('click', () => box.ask(b.dataset.instr)));
+        log.querySelectorAll('.chat-save-rule').forEach(b => b.addEventListener('click', async () => {
+            if (await saveRule(parseInt(ctx().candidate_id), b.dataset.kind, b.dataset.rule)) { b.disabled = true; b.textContent = '📌 Saved as a rule'; }
+        }));
         log.scrollTop = log.scrollHeight;
+        const cid = parseInt(ctx().candidate_id);
+        if (cid && rules.candId !== cid) rulesLoad(cid);
     };
     box.visible = () => { const el = $(`${prefix}-email-box`); return !!el && el.style.display !== 'none' && !!(box.rendered && $(`${prefix}-email-body`).value.trim()); };
     box.values = () => ({ to: $(`${prefix}-email-to`).value.trim(), subject: $(`${prefix}-email-subject`).value.trim(), body: $(`${prefix}-email-body`).value.trim(),
@@ -5794,7 +5900,7 @@ function emailBox(prefix, ctx) {
             const d = await res.json().catch(() => ({}));
             if (!res.ok || !d.success) { showToast(d.error || 'The AI could not answer.', 'error'); return; }
             const extraQ = (d.needs_info || []).length ? `<div>❓ ${d.needs_info.map(escapeHtml).join('<br>❓ ')}</div>` : '';
-            chatMem.push(key, { role: 'assistant', html: escapeHtml(d.reply || '') + extraQ + chatSuggestionsHtml(d.suggestions, 'em-sugg'),
+            chatMem.push(key, { role: 'assistant', html: escapeHtml(d.reply || '') + extraQ + chatSuggestionsHtml(d.suggestions, 'em-sugg') + chatRuleHtml(d.save_rule, 'email'),
                 text: [d.reply || '', ...(d.changes || []).map(x => 'Changed: ' + x), ...(d.suggestions || []).map(s => 'Suggested: ' + s.label)].join(' | ') });
             box.showChat();
             if (d.applied) {

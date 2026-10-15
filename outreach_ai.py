@@ -27,10 +27,14 @@ First decide what the recruiter's message is:
 - a QUESTION or a request for advice ("is this good?", "what is missing?", "REVIEW"): answer it in
   "reply" and change NOTHING - return the CURRENT subject and body as they are.
 Use CONVERSATION SO FAR: what the recruiter told you earlier still holds (facts they stated count as given).
-Always add up to 3 "suggestions": specific improvements YOU recommend next for THIS job (e.g. the JD asks
+Always add 2 or 3 "suggestions": specific improvements YOU recommend next for THIS job (e.g. the JD asks
 for something the email doesn't answer, the subject doesn't match what the JD asks, a claim the resume
-doesn't back), each with a short "label" and the exact "instruction" that would apply it. Don't repeat
-suggestions the recruiter already rejected. Plain text only - no markdown, no asterisks. Keep the greeting,
+doesn't back), each with a short "label" and the exact "instruction" that would apply it. Only if there is
+truly nothing worth improving, say so in "reply" and give none. Don't repeat suggestions the recruiter rejected.
+Follow CONSULTANT RULES (the recruiter's standing instructions for this consultant's emails) unless the
+current message says otherwise. If the recruiter states a standing preference for ALL of this consultant's
+emails ("every email", "always", "from now on"), apply it now AND put it, rewritten as one clear rule, in
+"save_rule" - the recruiter can then save it. Plain text only - no markdown, no asterisks. Keep the greeting,
 the sign-off and the signature lines (name, phone, email) unless told otherwise.
 
 Facts: use ONLY the facts given in FACTS (FACTS.resume is the resume being attached - its projects and
@@ -45,7 +49,8 @@ Return ONLY a JSON object:
 {"subject": "...", "body": "...", "changes": ["short description of each change you made"],
  "needs_info": ["question for the recruiter, only when a fact is missing"],
  "reply": "what you did, or your answer / assessment (2-4 sentences)",
- "suggestions": [{"label": "short", "instruction": "what to apply"}]}"""
+ "suggestions": [{"label": "short", "instruction": "what to apply"}],
+ "save_rule": "only when the recruiter stated a preference for every email - else empty"}"""
 
 REVIEW = "__review__"
 REVIEW_ASK = ("REVIEW: assess this email for this job as an experienced recruiter would - is it right for what the JD "
@@ -142,7 +147,9 @@ def edit_draft(cand: Dict, job: Dict, instruction: str, subject: str, body: str,
         f["resume"] = ""
     jd = (jd_text or job.get("full_description") or job.get("description") or "").strip()[:8000]
     convo = resume_bot.chat_history_text(history)
-    prompt = (f"FACTS:\n{json.dumps(f, indent=1, default=str)}\n\n" + (f"JOB_DESCRIPTION:\n{jd}\n\n" if jd else "")
+    import consultant_rules
+    rules_block = consultant_rules.prompt_block(cand.get("id"), "email")
+    prompt = (rules_block + f"FACTS:\n{json.dumps(f, indent=1, default=str)}\n\n" + (f"JOB_DESCRIPTION:\n{jd}\n\n" if jd else "")
               + (f"CONVERSATION SO FAR:\n{convo}\n\n" if convo else "")
               + f"CURRENT SUBJECT:\n{subject}\n\nCURRENT EMAIL:\n{body}\n\nRECRUITER'S MESSAGE:\n{instruction}\n")
     try:
@@ -156,13 +163,15 @@ def edit_draft(cand: Dict, job: Dict, instruction: str, subject: str, body: str,
     changes = [str(x) for x in (data.get("changes") or []) if str(x).strip()][:8]
     tips = resume_bot.clean_suggestions(data.get("suggestions"))
     answer = str(data.get("reply") or "").strip()
+    rule = str(data.get("save_rule") or "").strip()[:500]
+    unchanged["save_rule"] = rule
     if not data:
         return dict(unchanged, model=model, reply="The AI's answer couldn't be read, so the draft was not changed - please try again.")
     if review:
         return dict(unchanged, model=model, needs_info=needs, suggestions=tips, reply=answer or "Here is what I would improve.")
     # facts the recruiter stated earlier in this chat count as theirs
     problems = guard(f, subject + "\n" + body, new_subject + "\n" + new_body,
-                     instruction + "\n" + resume_bot.history_user_text(history))
+                     instruction + "\n" + resume_bot.history_user_text(history) + "\n" + rules_block)
     if problems:
         return dict(unchanged, model=model, needs_info=needs, suggestions=tips,
                     reply="I didn't apply that edit because it would add " + "; ".join(problems)
@@ -175,5 +184,5 @@ def edit_draft(cand: Dict, job: Dict, instruction: str, subject: str, body: str,
             msg = answer or "No change was made to the draft."
         return dict(unchanged, model=model, needs_info=needs, suggestions=tips, reply=msg)
     return {"subject": new_subject, "body": new_body, "changes": changes, "needs_info": needs, "lines_changed": n,
-            "suggestions": tips, "model": model, "applied": True,
+            "suggestions": tips, "save_rule": rule, "model": model, "applied": True,
             "reply": str(data.get("reply") or "").strip() or f"Updated the draft ({n} line{'s' if n != 1 else ''} changed)."}

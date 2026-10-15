@@ -43,7 +43,10 @@
                     <div style="display:flex; flex-direction:column; border:1px solid #e2e8f0; border-radius:10px; background:#fff; min-width:0;">
                         <div style="padding:10px 12px; border-bottom:1px solid #f1f5f9; display:flex; justify-content:space-between; align-items:center;">
                             <b style="font-size:0.85rem; color:#0f172a;">✏️ Edit with AI</b>
-                            <button type="button" id="{{ p }}-undo" class="btn btn-secondary btn-xs" disabled>↶ Undo</button>
+                            <span style="display:flex; gap:6px; align-items:center;">
+                                <a href="#" id="{{ p }}-rules" class="rules-link" style="font-size:0.75rem; font-weight:700;" title="Standing instructions for every resume of this consultant">📌 Rules</a>
+                                <button type="button" id="{{ p }}-undo" class="btn btn-secondary btn-xs" disabled>↶ Undo</button>
+                            </span>
                         </div>
                         <div id="{{ p }}-chat-msgs" class="rv-chat-msgs" style="height:{{ chat_h }}; overflow-y:auto; padding:10px 12px; display:flex; flex-direction:column; gap:8px; font-size:0.82rem;">
                             <div style="background:#f1f5f9; padding:8px 10px; border-radius:10px;">Ask me anything about this resume for this job ("is the headline right?") or tell me what to change ("change the headline to Senior DevOps Engineer"). I remember our conversation and suggest what to do next. I edit the Word file itself, so the format stays. Click a line in the preview to point at it. Dates, years and past job titles stay as they are unless you ask; new technologies only if you name them.</div>
@@ -1329,6 +1332,29 @@
     </div>
 
     <!-- New requirement emails -> tailored resume -> Gmail draft reply (inbox_requirements.py) -->
+    <!-- 📌 Rules for a consultant: standing instructions for every email / resume (consultant_rules.py) -->
+    <div class="modal-backdrop" id="modal-rules" style="display: none; z-index: 1400;">
+        <div class="modal-dialog" style="max-width: 680px; width: 94vw;">
+            <div class="modal-header">
+                <h3 id="rules-title">📌 Rules</h3>
+                <button class="modal-close" type="button" id="btn-close-rules">&times;</button>
+            </div>
+            <div class="modal-body">
+                <p style="font-size:0.82rem; color:#475569; margin:0 0 12px;">Followed in <b>every</b> email and resume written for this consultant - the first email, the replies to requirements from Gmail, and both AI chats. Rules never make facts up: anything unknown is left as [please fill].</p>
+                <div style="font-size:0.85rem; font-weight:800; color:#0f172a; margin-bottom:4px;">✉️ Email rules</div>
+                <div id="rules-email" style="margin-bottom:12px;"></div>
+                <div style="font-size:0.85rem; font-weight:800; color:#0f172a; margin-bottom:4px;">📄 Resume rules</div>
+                <div id="rules-resume" style="margin-bottom:12px;"></div>
+                <div style="display:flex; gap:6px; border-top:1px solid #e2e8f0; padding-top:12px;">
+                    <select id="rules-kind" class="form-control" style="max-width:140px;"><option value="email">Email rule</option><option value="resume">Resume rule</option></select>
+                    <input id="rules-text" class="form-control" placeholder="e.g. Start with 'Hi {first name},' then say where we found the job" style="flex:1;">
+                    <button type="button" class="btn btn-primary btn-sm" id="rules-add">Add</button>
+                </div>
+                <div id="rules-msg" style="font-size:0.8rem; color:#b91c1c; margin-top:6px;"></div>
+            </div>
+        </div>
+    </div>
+
     <div class="modal-backdrop" id="modal-reqs" style="display: none; z-index: 1150;">
         <div class="modal-dialog" style="max-width: 1200px; width: 96vw;">
             <div class="modal-header">
@@ -1493,7 +1519,7 @@
         window.VIEW_REGION = {{ view_region | tojson }};</script>
     <script src="/static/vendor/jszip.min.js"></script>
     <script src="/static/vendor/docx-preview.min.js"></script>
-    <script src="/static/js/app.js?v=5.86.0"></script>
+    <script src="/static/js/app.js?v=5.87.0"></script>
 
     <!-- Recruiter Management Inline Fallback: app.js defines all of these with toast-based
          feedback and no page reloads. These only fire if app.js somehow failed to load -
