@@ -239,7 +239,7 @@ try:
         page.fill("input[name=password]", PASSWORD)
         page.click("button[type=submit]")
         page.wait_for_url("**/dashboard**")
-        check("app.js?v=5.87.0" in page.content(), "cache-buster not bumped to 5.87.0")
+        check("app.js?v=5.88.0" in page.content(), "cache-buster not bumped to 5.88.0")
         page.wait_for_function("state.consultants && state.consultants.length >= 1", timeout=15000)
 
         page.click("#btn-open-paste-draft-modal")

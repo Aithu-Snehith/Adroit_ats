@@ -2878,24 +2878,69 @@ def api_admin_reassign_candidate(candidate_id):
         return jsonify({"error": "Forbidden"}), 403
 
     data = request.json or {}
-    new_user_id = data.get("assigned_user_id")
-    if not new_user_id:
-        return jsonify({"error": "assigned_user_id is required"}), 400
-
-    target_user = models.get_user_by_id(new_user_id)
+    target_user = models.get_user_by_id(_int_or_none(data.get("assigned_user_id")) or 0)
     if not target_user:
-        return jsonify({"error": "Target recruiter not found"}), 404
-
+        return jsonify({"error": "Choose the recruiter to assign to."}), 400
     cand = models.get_candidate_by_id(candidate_id, is_admin=True)
     if not cand:
         return jsonify({"error": "Candidate not found"}), 404
+    problem = _assign_problem(cand, target_user)
+    if problem:
+        return jsonify({"error": problem}), 400
+    _assign(user, cand, target_user)
+    return jsonify({"success": True, "recruiter_name": target_user["name"],
+                    "message": f"{cand['name']} is now assigned to {target_user['name']}."})
 
-    models.assign_candidate_to_recruiter(candidate_id, new_user_id)
-    models.log_activity(
-        user["id"], user["name"], "Reassigned Candidate", "Candidate", candidate_id,
-        f"Reassigned candidate '{cand['name']}' to recruiter '{target_user['name']}'"
-    )
-    return jsonify({"success": True, "message": f"Candidate reassigned to {target_user['name']}."})
+
+def _assign_problem(cand, target_user) -> str:
+    """Why this consultant can't go to that recruiter ('' = fine). A recruiter only sees consultants of
+    their own team (USA / India), so a cross-team assignment would hide the consultant from them."""
+    if cand.get("assigned_user_id") == target_user["id"]:
+        return f"{cand['name']} is already assigned to {target_user['name']}."
+    if "Admin" in (target_user.get("role") or ""):
+        return ""
+    conn = models.get_db_connection()
+    try:
+        team = regions.user_region(conn, target_user["id"])
+    finally:
+        conn.close()
+    cand_team = regions.candidate_region(cand)
+    if team != cand_team:
+        return (f"{target_user['name']} is on the {team} team and {cand['name']} is a {cand_team} consultant, so "
+                f"{target_user['name']} wouldn't see them. Change {target_user['name']}'s team in Admin & Settings first.")
+    return ""
+
+
+def _assign(admin, cand, target_user) -> None:
+    before = (models.get_user_by_id(cand.get("assigned_user_id")) or {}).get("name") or "nobody"
+    models.assign_candidate_to_recruiter(cand["id"], target_user["id"])
+    models.log_activity(admin["id"], admin["name"], "Reassigned Candidate", "Candidate", cand["id"],
+                        f"Moved consultant '{cand['name']}' from {before} to {target_user['name']}")
+
+
+@app.route("/api/admin/candidates/reassign", methods=["POST"])
+def api_admin_reassign_many():
+    """Admin: assign several consultants to one recruiter. Each is checked on its own; the ones that
+    can't move (other team / already there) are listed with the reason."""
+    user = current_user()
+    if not user or "Admin" not in user.get("role", ""):
+        return jsonify({"error": "Forbidden"}), 403
+    data = request.get_json(silent=True) or {}
+    target_user = models.get_user_by_id(_int_or_none(data.get("assigned_user_id")) or 0)
+    if not target_user:
+        return jsonify({"error": "Choose the recruiter to assign to."}), 400
+    moved, skipped = [], []
+    for cid in list(dict.fromkeys(_int_or_none(x) for x in (data.get("candidate_ids") or [])[:500])):
+        cand = models.get_candidate_by_id(cid, is_admin=True) if cid else None
+        if not cand:
+            continue
+        problem = _assign_problem(cand, target_user)
+        if problem:
+            skipped.append({"id": cid, "name": cand["name"], "reason": problem})
+            continue
+        _assign(user, cand, target_user)
+        moved.append({"id": cid, "name": cand["name"]})
+    return jsonify({"success": True, "moved": moved, "skipped": skipped, "recruiter_name": target_user["name"]})
 
 
 # --- Education filters (Sourcing: Filter A = Indian college -> US Master's, Filter B = US university

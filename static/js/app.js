@@ -2927,7 +2927,18 @@ async function onDeleteRecruiter(recId, recName) {
 }
 window.onDeleteRecruiter = onDeleteRecruiter;
 
-function openReassignModal(candId, candName) {
+async function openReassignModal(candId, candName) {
+    const sel = document.getElementById('reassign-target-user-id');
+    const cand = (state.consultants || []).find(c => String(c.id) === String(candId));
+    if (sel) {
+        const list = await consRecruiters();
+        sel.innerHTML = list.filter(r => !cand || r.id !== cand.assigned_user_id)
+            .map(r => `<option value="${r.id}">${escapeHtml(consRecruiterLabel(r))}</option>`).join('');
+    }
+    return openReassignModalBase(candId, candName);
+}
+
+function openReassignModalBase(candId, candName) {
     const modal = document.getElementById('modal-reassign-consultant');
     const idInput = document.getElementById('reassign-cand-id');
     const nameEl = document.getElementById('reassign-cand-name');
@@ -2963,7 +2974,7 @@ async function submitReassign(e) {
         });
         const data = await res.json();
         if (res.ok && data.success) {
-            showToast('Consultant transferred successfully!', 'success');
+            showToast(data.message || 'Consultant transferred successfully!', 'success');
             closeReassignModal();
             await fetchConsultants();
             await loadRecruiters();
@@ -2990,6 +3001,70 @@ document.addEventListener('click', (e) => {
 // =========================================================================
 // Executive Candidates Table View (Row layout with Head Titles)
 // =========================================================================
+// Admin: assign consultants to recruiters - one (✎ Change) or several (tick + Assign).
+const consBulk = { selected: new Set(), recruiters: null, wired: false };
+
+async function consRecruiters() {
+    if (!consBulk.recruiters) {
+        try { const r = await fetch('/api/admin/recruiters'); consBulk.recruiters = r.ok ? await r.json() : []; } catch (e) { consBulk.recruiters = []; }
+    }
+    return consBulk.recruiters;
+}
+const consRecruiterLabel = (r) => `${r.name} - ${(r.role || '').includes('Admin') ? 'Admin' : (r.region || 'USA') + ' team'}`;
+
+function consBulkRefresh() {
+    const bar = document.getElementById('cons-bulk-bar');
+    if (!bar) return;
+    const visible = new Set((state.consultants || []).map(c => c.id));
+    [...consBulk.selected].forEach(id => { if (!visible.has(id)) consBulk.selected.delete(id); });
+    const n = consBulk.selected.size;
+    bar.style.display = n ? 'flex' : 'none';
+    document.getElementById('cons-bulk-count').textContent = `${n} consultant${n === 1 ? '' : 's'} selected`;
+    const all = document.getElementById('cons-select-all');
+    if (all) all.checked = n > 0 && n === visible.size;
+}
+
+async function consBulkWire() {
+    if (consBulk.wired || !document.getElementById('cons-bulk-bar')) return;
+    consBulk.wired = true;
+    document.getElementById('consultants-table-body').addEventListener('change', (e) => {
+        const cb = e.target.closest('.cons-select');
+        if (!cb) return;
+        if (cb.checked) consBulk.selected.add(parseInt(cb.value)); else consBulk.selected.delete(parseInt(cb.value));
+        consBulkRefresh();
+    });
+    document.getElementById('cons-select-all').addEventListener('change', (e) => {
+        (state.consultants || []).forEach(c => { if (e.target.checked) consBulk.selected.add(c.id); else consBulk.selected.delete(c.id); });
+        document.querySelectorAll('.cons-select').forEach(cb => { cb.checked = e.target.checked; });
+        consBulkRefresh();
+    });
+    document.getElementById('cons-bulk-clear').addEventListener('click', () => {
+        consBulk.selected.clear();
+        document.querySelectorAll('.cons-select').forEach(cb => { cb.checked = false; });
+        consBulkRefresh();
+    });
+    document.getElementById('cons-bulk-assign').addEventListener('click', async () => {
+        const to = document.getElementById('cons-bulk-recruiter').value;
+        if (!to || !consBulk.selected.size) return;
+        const btn = document.getElementById('cons-bulk-assign');
+        btn.disabled = true;
+        try {
+            const res = await fetch('/api/admin/candidates/reassign', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ candidate_ids: [...consBulk.selected], assigned_user_id: parseInt(to) }) });
+            const d = await res.json().catch(() => ({}));
+            if (!res.ok) { showToast(d.error || 'Could not assign.', 'error'); return; }
+            const skipped = d.skipped || [];
+            showToast(`${d.moved.length} consultant${d.moved.length === 1 ? '' : 's'} assigned to ${d.recruiter_name}.`
+                + (skipped.length ? ` Not moved: ${skipped.map(s => `${s.name} (${s.reason})`).join(' ')}` : ''), skipped.length ? 'warning' : 'success', skipped.length ? 12000 : 5000);
+            consBulk.selected.clear();
+            await fetchConsultants();
+            if (typeof loadRecruiters === 'function') loadRecruiters();
+        } finally { btn.disabled = false; }
+    });
+    const list = await consRecruiters();
+    document.getElementById('cons-bulk-recruiter').innerHTML = list.map(r => `<option value="${r.id}">${escapeHtml(consRecruiterLabel(r))}</option>`).join('');
+}
+
 function renderConsultantsTable() {
     const tbody = document.getElementById('consultants-table-body');
     if (!tbody) {
@@ -3007,6 +3082,8 @@ function renderConsultantsTable() {
         return;
     }
 
+    consBulkWire();
+    setTimeout(consBulkRefresh, 0);
     tbody.innerHTML = state.consultants.map(c => {
         const initials = (c.name || "C").split(' ').map(n => n[0]).join('').substring(0, 2).toUpperCase();
         const hasResume = Boolean(c.resume_filename || c.resume_path);
@@ -3016,8 +3093,10 @@ function renderConsultantsTable() {
             ? c.linkedin_url
             : `https://www.linkedin.com/search/results/people/?keywords=${encodeURIComponent(cleanName)}&origin=GLOBAL_SEARCH_HEADER`;
 
+        const isAdmin = !!(window.CURRENT_USER || {}).admin;
         return `
         <tr style="border-bottom: 1px solid #f1f5f9; transition: background 0.15s ease;" onmouseover="this.style.background='#f8fafc'" onmouseout="this.style.background='transparent'">
+            ${isAdmin ? `<td style="padding: 14px 0 14px 18px;"><input type="checkbox" class="cons-select" value="${c.id}" ${consBulk.selected.has(c.id) ? 'checked' : ''} title="Select to assign several at once"></td>` : ''}
             <td style="padding: 14px 18px;">
                 <div style="display: flex; align-items: center; gap: 12px;">
                     <div style="width: 36px; height: 36px; border-radius: 50%; background: #eff6ff; color: #2563eb; font-weight: 700; font-size: 0.85rem; display: flex; align-items: center; justify-content: center; border: 1px solid #bfdbfe; flex-shrink: 0;">
@@ -3055,6 +3134,9 @@ function renderConsultantsTable() {
                 <span style="font-weight: 600; color: #0284c7; font-size: 0.85rem;">
                     👤 ${escapeHtml(c.recruiter_name || 'Assigned')}
                 </span>
+                ${isAdmin ? `<div><button type="button" class="btn-trigger-reassign" data-id="${c.id}" data-name="${escapeHtml(c.name)}"
+                    style="margin-top:4px; padding:2px 8px; font-size:0.72rem; font-weight:700; color:#6d28d9; background:#f5f3ff; border:1px solid #c4b5fd; border-radius:6px; cursor:pointer;"
+                    title="Admin: assign this consultant to another recruiter">✎ Change</button></div>` : ''}
             </td>
             <td style="padding: 14px 18px;">
                 <div style="display: flex; flex-direction: column; gap: 6px;">

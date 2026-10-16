@@ -680,11 +680,21 @@
                         </button>
                     </div>
 
+                    {% if 'Admin' in user.role %}
+                    <div id="cons-bulk-bar" style="display:none; align-items:center; gap:8px; margin-bottom:10px; padding:10px 14px; border:1px solid #bfdbfe; background:#eff6ff; border-radius:10px; font-size:0.85rem;">
+                        <b id="cons-bulk-count" style="color:#1d4ed8;"></b>
+                        <span style="color:#334155;">Assign to</span>
+                        <select id="cons-bulk-recruiter" class="form-control" style="max-width:280px; height:34px;"></select>
+                        <button type="button" class="btn btn-primary btn-sm" id="cons-bulk-assign">Assign</button>
+                        <button type="button" class="btn btn-secondary btn-sm" id="cons-bulk-clear">Clear</button>
+                    </div>
+                    {% endif %}
                     <div style="background: #ffffff; border: 1px solid #e2e8f0; border-radius: 12px; overflow: hidden; box-shadow: var(--shadow-card);">
                         <div style="overflow-x: auto;">
                             <table style="width: 100%; border-collapse: collapse; text-align: left; font-size: 0.875rem;">
                                 <thead>
                                     <tr style="background: #f8fafc; color: #475569; border-bottom: 1px solid #e2e8f0; font-size: 0.75rem; text-transform: uppercase; font-weight: 600; letter-spacing: 0.05em;">
+                                        {% if 'Admin' in user.role %}<th style="padding: 14px 0 14px 18px; width: 28px;"><input type="checkbox" id="cons-select-all" title="Select all shown"></th>{% endif %}
                                         <th style="padding: 14px 18px;">Candidate</th>
                                         <th style="padding: 14px 18px;">Rate / Salary</th>
                                         <th style="padding: 14px 18px;">Work Auth / Visa</th>
@@ -1519,7 +1529,7 @@
         window.VIEW_REGION = {{ view_region | tojson }};</script>
     <script src="/static/vendor/jszip.min.js"></script>
     <script src="/static/vendor/docx-preview.min.js"></script>
-    <script src="/static/js/app.js?v=5.87.0"></script>
+    <script src="/static/js/app.js?v=5.88.0"></script>
 
     <!-- Recruiter Management Inline Fallback: app.js defines all of these with toast-based
          feedback and no page reloads. These only fire if app.js somehow failed to load -
