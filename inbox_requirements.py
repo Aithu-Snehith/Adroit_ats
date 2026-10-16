@@ -73,6 +73,15 @@ def _skip_reason(p: Dict) -> str:
     return ""
 
 
+_REPLY_SUBJECT = re.compile(r"^\s*((re|aw|sv|antw)\s*(\[\d+\])?\s*:\s*)+", re.I)
+
+
+def is_thread_reply(p: Dict, ours) -> bool:
+    """A reply in one of our threads: answers our email (In-Reply-To / References) or its subject is 'Re: ...'."""
+    refs = p.get("references_hdr") or ""
+    return bool(p.get("in_reply_to") in ours or any(m and m in refs for m in ours) or _REPLY_SUBJECT.match(p.get("subject") or ""))
+
+
 def _known(conn, cand_id: int) -> Dict:
     """Addresses and Message-IDs the Replies feature owns, and messages already handled here."""
     cur = conn.cursor()
@@ -205,10 +214,13 @@ def scan_candidate(conn, cand: Dict, user_id: Optional[int] = None, imap_factory
         msg = email.message_from_bytes(raw)
         p = reply_inbox.parse_message(raw)
         p["reply_to"] = parseaddr(reply_inbox._decode(msg.get("Reply-To")))[1].lower()
-        if not p["message_id"] or p["message_id"] in known["replies"]:
+        if not p["message_id"] or p["from_email"] == account.lower():
             continue
-        if p["from_email"] in known["addrs"] or p["in_reply_to"] in known["ours"] or p["from_email"] == account.lower():
-            stats["skipped_known"] += 1          # a reply to one of our applications - the Replies feature handles it
+        # A real reply to one of our applications belongs to the Replies feature. The same recruiter writing a
+        # NEW email (fresh subject, not in our thread) is often a new requirement - that one is checked here.
+        if is_thread_reply(p, known["ours"]) and (p["message_id"] in known["replies"] or p["from_email"] in known["addrs"]
+                                                  or p["in_reply_to"] in known["ours"]):
+            stats["skipped_known"] += 1
             continue
         rid = _claim(conn, cand["id"], p, known)
         if not rid:

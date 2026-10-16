@@ -189,6 +189,18 @@ check(a and a["stage"] == "Drafted" and a["resume_version_id"] == r1["resume_ver
 s2 = iq.scan_candidate(conn, models.get_candidate_by_id(cid), REC["id"])
 check(s2["checked"] == 0 and len(appended) == 1 and len(opt_calls) == 2, f"second scan adds nothing: {s2} drafts={len(appended)}")
 
+# ---- the same recruiter (an application's recruiter) sends a NEW requirement: checked, not taken for a reply
+mail(10, "Known <known@acme.example>", "DevOps SRE Engineer || Dallas, TX || Contract",
+     "Hi, we are hiring a DevOps SRE Engineer - AWS, Kubernetes. Please share your updated resume.", "<new10@acme>")
+s3 = iq.scan_candidate(conn, models.get_candidate_by_id(cid), REC["id"])
+rows3 = {r["message_id"]: r for r in iq.list_for(conn, [cid])}
+check(rows3.get("<new10@acme>", {}).get("status") == "drafted", f"a known recruiter's new requirement is checked: {rows3.get('<new10@acme>')} {s3}")
+check("<r6@acme>" not in rows3, "their 'Re:' reply is still left to the Replies feature")
+check(iq.is_thread_reply({"subject": "RE: Old Job", "in_reply_to": "", "references_hdr": ""}, set())
+      and iq.is_thread_reply({"subject": "Interview", "in_reply_to": "<ours@x>", "references_hdr": ""}, {"<ours@x>"})
+      and not iq.is_thread_reply({"subject": "Java Full Stack Developer || Lake Mary, FL", "in_reply_to": "", "references_hdr": ""}, {"<ours@x>"}),
+      "what counts as a reply")
+
 # ---- AI outage -> error, retried later
 resume_bot.ai_configured = lambda: False
 mail(7, "Sam <sam@vendor7.example>", "Hiring: Kubernetes Engineer", "We are hiring a Kubernetes engineer - AWS, Kubernetes.", "<req7@v7>")
@@ -197,8 +209,8 @@ check({r["message_id"]: r for r in iq.list_for(conn, [cid])}["<req7@v7>"]["statu
 resume_bot.ai_configured = lambda: True
 iq.scan_candidate(conn, models.get_candidate_by_id(cid), REC["id"])
 r7 = {r["message_id"]: r for r in iq.list_for(conn, [cid])}["<req7@v7>"]
-check(r7["status"] == "drafted" and r7["attempts"] == 2 and len(appended) == 2, f"retried and drafted: {r7['status']} attempts={r7['attempts']}")
-b7 = appended[-1].get_body(preferencelist=("plain",)).get_content() if len(appended) == 2 else ""
+check(r7["status"] == "drafted" and r7["attempts"] == 2 and len(appended) == 3, f"retried and drafted: {r7['status']} attempts={r7['attempts']}")
+b7 = appended[-1].get_body(preferencelist=("plain",)).get_content() if len(appended) == 3 else ""
 check(b7.startswith("Hi Sam,"), f"a real person's first name is used: {b7[:30]!r}")
 j1_, j7_ = r1["job_id"], r7["job_id"]
 check(j1_ != j7_ and models.get_job_by_id(j1_)["recruiter_email"] == "rakesh.r@virtusa-vendor.example"
@@ -211,7 +223,7 @@ client = app_module.app.test_client()
 with client.session_transaction() as s_:
     s_["user"] = {**REC, "email": EMAIL}
 lst = client.get(f"/api/requirements?candidate_id={cid}").get_json()
-check(len(lst["requirements"]) == 6 and lst["min_match"] == 60, f"listed: {len(lst['requirements'])}")
+check(len(lst["requirements"]) == 7 and lst["min_match"] == 60, f"listed: {len(lst['requirements'])}")
 mail(8, "Ann <ann@vendor8.example>", "Requirement: SRE", "Hiring SRE - AWS, Kubernetes.", "<req8@v8>")
 r = client.post("/api/requirements/scan", json={"candidate_id": cid}).get_json()
 check(r["started"], f"scan started in the background: {r}")
